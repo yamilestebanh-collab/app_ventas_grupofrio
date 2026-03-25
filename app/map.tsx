@@ -1,0 +1,215 @@
+/**
+ * V1.3 Route Map — Google Maps real with stops, status, and navigation.
+ * Requires expo prebuild (react-native-maps).
+ */
+
+import React, { useMemo, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import { TopBar } from '../src/components/ui/TopBar';
+import { useRouteStore } from '../src/stores/useRouteStore';
+import { useLocationStore } from '../src/stores/useLocationStore';
+import { colors, spacing, radii } from '../src/theme/tokens';
+import { typography } from '../src/theme/typography';
+import type { GFStop, StopState } from '../src/types/plan';
+
+const STATUS_COLORS: Record<StopState, string> = {
+  pending: '#8B95A3',
+  in_progress: '#FF6B35',
+  done: '#22C55E',
+  not_visited: '#EF4444',
+  no_stock: '#F59E0B',
+  rejected: '#EF4444',
+  closed: '#6B7280',
+};
+
+const STATUS_LABELS: Record<StopState, string> = {
+  pending: 'Pendiente',
+  in_progress: 'En curso',
+  done: 'Visitado',
+  not_visited: 'Sin visita',
+  no_stock: 'Sin stock',
+  rejected: 'Rechazado',
+  closed: 'Cerrado',
+};
+
+export default function MapScreen() {
+  const stops = useRouteStore((s) => s.stops);
+  const lat = useLocationStore((s) => s.latitude);
+  const lon = useLocationStore((s) => s.longitude);
+
+  // Stops with coordinates
+  const stopsWithCoords = useMemo(() =>
+    stops.filter((s) => s.customer_latitude && s.customer_longitude),
+  [stops]);
+
+  // Map region to fit all stops
+  const region = useMemo(() => {
+    if (stopsWithCoords.length === 0) {
+      return {
+        latitude: lat || 20.6597,
+        longitude: lon || -103.3496,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+    }
+    const lats = stopsWithCoords.map((s) => s.customer_latitude!);
+    const lngs = stopsWithCoords.map((s) => s.customer_longitude!);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+    return {
+      latitude: (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      latitudeDelta: Math.max(0.01, (maxLat - minLat) * 1.3),
+      longitudeDelta: Math.max(0.01, (maxLng - minLng) * 1.3),
+    };
+  }, [stopsWithCoords, lat, lon]);
+
+  // Route polyline
+  const routeCoords = useMemo(() =>
+    stopsWithCoords
+      .sort((a, b) => (a.route_sequence || 0) - (b.route_sequence || 0))
+      .map((s) => ({ latitude: s.customer_latitude!, longitude: s.customer_longitude! })),
+  [stopsWithCoords]);
+
+  // Navigate to external maps
+  const openNavigation = useCallback((stop: GFStop) => {
+    if (!stop.customer_latitude || !stop.customer_longitude) {
+      Alert.alert('Sin coordenadas', 'Esta parada no tiene ubicacion.');
+      return;
+    }
+    const label = encodeURIComponent(stop.customer_name);
+    const url = Platform.select({
+      ios: `maps://app?daddr=${stop.customer_latitude},${stop.customer_longitude}&q=${label}`,
+      android: `google.navigation:q=${stop.customer_latitude},${stop.customer_longitude}`,
+    });
+    if (url) Linking.openURL(url).catch(() => {
+      Linking.openURL(
+        `https://www.google.com/maps/dir/?api=1&destination=${stop.customer_latitude},${stop.customer_longitude}`
+      );
+    });
+  }, []);
+
+  const visited = stops.filter((s) => s.state === 'done').length;
+  const pending = stops.filter((s) => s.state === 'pending').length;
+  const noCoords = stops.length - stopsWithCoords.length;
+
+  return (
+    <SafeAreaView style={styles.safe} edges={['top']}>
+      <TopBar title="🗺️ Mapa de Ruta" showBack />
+
+      {/* Stats bar */}
+      <View style={styles.statsBar}>
+        <View style={styles.stat}>
+          <Text style={styles.statNum}>{stops.length}</Text>
+          <Text style={styles.statLabel}>Paradas</Text>
+        </View>
+        <View style={styles.stat}>
+          <Text style={[styles.statNum, { color: '#22C55E' }]}>{visited}</Text>
+          <Text style={styles.statLabel}>Visitadas</Text>
+        </View>
+        <View style={styles.stat}>
+          <Text style={[styles.statNum, { color: colors.primary }]}>{pending}</Text>
+          <Text style={styles.statLabel}>Pendientes</Text>
+        </View>
+        {noCoords > 0 && (
+          <View style={styles.stat}>
+            <Text style={[styles.statNum, { color: '#EF4444' }]}>{noCoords}</Text>
+            <Text style={styles.statLabel}>Sin GPS</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Map */}
+      <View style={styles.mapContainer}>
+        <MapView
+          provider={PROVIDER_GOOGLE}
+          style={styles.map}
+          initialRegion={region}
+          showsUserLocation
+          showsMyLocationButton
+          showsCompass
+          toolbarEnabled
+          mapType="standard"
+        >
+          {routeCoords.length > 1 && (
+            <Polyline
+              coordinates={routeCoords}
+              strokeColor="rgba(255,107,53,0.6)"
+              strokeWidth={3}
+              lineDashPattern={[10, 5]}
+            />
+          )}
+          {stopsWithCoords.map((stop) => (
+            <Marker
+              key={stop.id}
+              coordinate={{ latitude: stop.customer_latitude!, longitude: stop.customer_longitude! }}
+              title={`#${stop.route_sequence || '?'} ${stop.customer_name}`}
+              description={STATUS_LABELS[stop.state] || stop.state}
+              pinColor={STATUS_COLORS[stop.state] || '#8B95A3'}
+              onCalloutPress={() => openNavigation(stop)}
+            />
+          ))}
+        </MapView>
+      </View>
+
+      {/* Legend */}
+      <View style={styles.legend}>
+        {(['confirmed', 'in_progress', 'done', 'skipped'] as StopState[]).map((key) => (
+          <View key={key} style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: STATUS_COLORS[key] }]} />
+            <Text style={styles.legendText}>{STATUS_LABELS[key]}</Text>
+          </View>
+        ))}
+      </View>
+
+      {/* Navigate to next pending */}
+      {(() => {
+        const next = stopsWithCoords
+          .filter((s) => s.state === 'pending')
+          .sort((a, b) => (a.route_sequence || 0) - (b.route_sequence || 0))[0];
+        if (!next) return null;
+        return (
+          <TouchableOpacity style={styles.navButton} onPress={() => openNavigation(next)} activeOpacity={0.8}>
+            <Text style={styles.navButtonText}>
+              📍 Ir a #{next.route_sequence} {next.customer_name}
+            </Text>
+          </TouchableOpacity>
+        );
+      })()}
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.bg },
+  statsBar: {
+    flexDirection: 'row', justifyContent: 'space-around',
+    paddingVertical: 10, paddingHorizontal: spacing.screenPadding,
+    backgroundColor: colors.card,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  stat: { alignItems: 'center' },
+  statNum: { fontSize: 18, fontWeight: '800', color: colors.text },
+  statLabel: { fontSize: 10, color: colors.textDim, marginTop: 2 },
+  mapContainer: { flex: 1 },
+  map: { flex: 1 },
+  legend: {
+    flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap',
+    paddingVertical: 8, paddingHorizontal: spacing.screenPadding,
+    backgroundColor: colors.card,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.05)',
+  },
+  legendItem: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 8, marginVertical: 2 },
+  legendDot: { width: 8, height: 8, borderRadius: 4, marginRight: 4 },
+  legendText: { fontSize: 10, color: colors.textDim },
+  navButton: {
+    backgroundColor: colors.primary,
+    marginHorizontal: spacing.screenPadding, marginBottom: 16,
+    paddingVertical: 14, borderRadius: radii.button, alignItems: 'center',
+  },
+  navButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+});

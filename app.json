@@ -1,0 +1,77 @@
+{
+  "expo": {
+    "name": "KOLD Field",
+    "slug": "kold-field",
+    "version": "1.3.1",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "kold-field",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F1419"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "mx.grupofrio.koldfield",
+      "config": {
+        "googleMapsApiKey": "GOOGLE_MAPS_API_KEY"
+      },
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "KOLD Field necesita tu ubicacion para verificar visitas a clientes.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "KOLD Field usa GPS para tracking de ruta del vendedor.",
+        "NSCameraUsageDescription": "KOLD Field necesita la camara para fotos de evidencia de visita.",
+        "UIBackgroundModes": ["location", "fetch"]
+      }
+    },
+    "android": {
+      "package": "mx.grupofrio.koldfield",
+      "config": {
+        "googleMaps": {
+          "apiKey": "GOOGLE_MAPS_API_KEY"
+        }
+      },
+      "adaptiveIcon": {
+        "backgroundColor": "#0F1419",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "CAMERA",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "KOLD Field usa GPS para tracking de ruta.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "KOLD Field necesita la camara para fotos de visita."
+        }
+      ]
+    ],
+    "extra": {
+      "googleMapsApiKey": "GOOGLE_MAPS_API_KEY"
+    }
+  }
+}
