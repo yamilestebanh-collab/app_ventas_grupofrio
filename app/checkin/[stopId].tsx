@@ -47,6 +47,7 @@ export default function CheckinScreen() {
 
   const [gpsLoading, setGpsLoading] = useState(true);
   const [checkedIn, setCheckedIn] = useState(phase === 'checked_in' || phase === 'selling' || phase === 'no_selling');
+  const [checkingIn, setCheckingIn] = useState(false); // Prevent double-tap
 
   // Timer tick
   useEffect(() => {
@@ -88,7 +89,7 @@ export default function CheckinScreen() {
 
   // Check-in handler — only if geofence OK
   async function handleCheckIn() {
-    if (!stop) return;
+    if (!stop || checkingIn) return; // Guard: prevent double-tap
     if (!isWithinFence && stop.customer_latitude && stop.customer_longitude) {
       Alert.alert(
         'Fuera de rango',
@@ -98,14 +99,16 @@ export default function CheckinScreen() {
       return;
     }
 
+    setCheckingIn(true); // Lock immediately
+
     const lat = latitude || 0;
     const lon = longitude || 0;
 
-    startVisit(stop, lat, lon);
-    updateStopState(stop.id, 'in_progress');
-    setCheckedIn(true);
-
     try {
+      startVisit(stop, lat, lon);
+      updateStopState(stop.id, 'in_progress');
+      setCheckedIn(true);
+
       if (isOnline) {
         await checkIn(stop.id, lat, lon);
       } else {
@@ -117,13 +120,19 @@ export default function CheckinScreen() {
         });
       }
     } catch {
+      // Server failed — enqueue for retry, keep visit started locally
       enqueue('checkin', {
         stop_id: stop.id,
         latitude: lat,
         longitude: lon,
         timestamp: Date.now(),
       });
+      if (!checkedIn) {
+        // Only reset lock if the visit didn't start (pre-startVisit failure)
+        setCheckingIn(false);
+      }
     }
+    // checkingIn stays true after success — screen transitions to post-checkin state
   }
 
   if (!stop) {
@@ -209,7 +218,7 @@ export default function CheckinScreen() {
             label={gpsLoading ? 'Obteniendo GPS...' : canCheckIn ? '📍 Hacer Check-in' : `🔴 Fuera de rango (${Math.round(distanceMeters || 0)}m)`}
             onPress={handleCheckIn}
             fullWidth
-            disabled={!canCheckIn}
+            disabled={!canCheckIn || checkingIn}
             loading={gpsLoading}
             style={{ marginTop: 16 }}
           />

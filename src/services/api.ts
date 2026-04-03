@@ -90,3 +90,41 @@ export function createApiClient(): AxiosInstance {
 
 // Singleton instance
 export const api = createApiClient();
+
+// ═══════════════════════════════════════════════════════════════
+// PROTOCOL HELPERS — Use these instead of raw api.post()
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * POST to a REST endpoint (e.g. gf/logistics/api/employee/*).
+ * Sends payload as-is, no JSON-RPC wrapping.
+ * Response data is returned directly — caller decides how to parse.
+ */
+export async function postRest<T = any>(
+  url: string,
+  data: Record<string, unknown> = {}
+): Promise<T> {
+  const response = await api.post(url, data);
+  // gf_logistics_ops REST endpoints may return data directly or in .result
+  return (response.data?.result ?? response.data) as T;
+}
+
+/**
+ * POST to an Odoo JSON-RPC endpoint (e.g. /jsonrpc, /get_records, /api/create_update).
+ * Wraps params in { jsonrpc: '2.0', params: {...} }.
+ * Returns the .result from the JSON-RPC response.
+ */
+export async function postRpc<T = any>(
+  url: string,
+  params: Record<string, unknown> = {}
+): Promise<T> {
+  const response = await api.post(url, {
+    jsonrpc: '2.0',
+    params,
+  });
+  if (response.data?.error) {
+    const errMsg = response.data.error?.data?.message || response.data.error?.message || 'Odoo RPC error';
+    throw new Error(errMsg);
+  }
+  return response.data?.result as T;
+}

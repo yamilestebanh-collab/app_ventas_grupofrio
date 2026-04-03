@@ -1,29 +1,27 @@
 /**
- * GF Logistics API endpoints — production-tested (from xVan).
+ * GF Logistics REST API endpoints.
+ *
+ * IMPORTANT: These are REST endpoints (gf_logistics_ops module), NOT JSON-RPC.
+ * They expect plain payloads: { stop_id: 123, latitude: ... }
+ * Do NOT wrap with jsonrpc/params — that causes 400 errors.
+ *
+ * For Odoo JSON-RPC endpoints (/jsonrpc, /get_records, /api/create_update),
+ * use odooRpc.ts or postRpc() from api.ts instead.
+ *
+ * Reference: useSyncStore.ts uses these same endpoints with plain payloads
+ * and works correctly in production.
  */
 
-import { api } from './api';
+import { postRest } from './api';
 import { GFPlan, GFStop } from '../types/plan';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
-/**
- * Helper to wrap Odoo JSON-RPC params.
- */
-function wrapRpc(params: Record<string, any> = {}) {
-  return {
-    jsonrpc: '2.0',
-    params,
-  };
-}
+// ═══ Plan & Route ═══
 
 export async function getMyPlan(): Promise<GFPlan | null> {
   try {
-    // FIX: Envolver en JSON-RPC para evitar error 400
-    const response = await api.post(`${GF_BASE}/my_plan`, wrapRpc());
-    
-    // Odoo puede devolver el resultado en .data.result o .data si es REST puro
-    const result = response.data?.result || response.data;
+    const result = await postRest<GFPlan | null>(`${GF_BASE}/my_plan`);
     return result || null;
   } catch (error) {
     console.warn('[gfLogistics] my_plan failed:', error);
@@ -33,8 +31,9 @@ export async function getMyPlan(): Promise<GFPlan | null> {
 
 export async function getPlanStops(planId: number): Promise<GFStop[]> {
   try {
-    const response = await api.post(`${GF_BASE}/plan/stops`, wrapRpc({ plan_id: planId }));
-    const result = response.data?.result || response.data;
+    const result = await postRest<GFStop[]>(`${GF_BASE}/plan/stops`, {
+      plan_id: planId,
+    });
     return Array.isArray(result) ? result : [];
   } catch (error) {
     console.warn('[gfLogistics] plan/stops failed:', error);
@@ -42,17 +41,18 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
   }
 }
 
+// ═══ Stop Operations ═══
+
 export async function checkIn(
   stopId: number,
   latitude: number,
   longitude: number
 ): Promise<boolean> {
-  const response = await api.post(`${GF_BASE}/stop/checkin`, wrapRpc({
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkin`, {
     stop_id: stopId,
     latitude,
     longitude,
-  }));
-  const result = response.data?.result || response.data;
+  });
   return !!result;
 }
 
@@ -61,19 +61,19 @@ export async function checkOut(
   latitude: number,
   longitude: number
 ): Promise<boolean> {
-  const response = await api.post(`${GF_BASE}/stop/checkout`, wrapRpc({
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, {
     stop_id: stopId,
     latitude,
     longitude,
-  }));
-  const result = response.data?.result || response.data;
+  });
   return !!result;
 }
 
 export async function getStopLines(stopId: number): Promise<unknown[]> {
   try {
-    const response = await api.post(`${GF_BASE}/stop/lines`, wrapRpc({ stop_id: stopId }));
-    const result = response.data?.result || response.data;
+    const result = await postRest<unknown[]>(`${GF_BASE}/stop/lines`, {
+      stop_id: stopId,
+    });
     return Array.isArray(result) ? result : [];
   } catch {
     return [];
@@ -85,12 +85,11 @@ export async function reportIncident(
   incidentTypeId: number,
   notes: string
 ): Promise<boolean> {
-  const response = await api.post(`${GF_BASE}/stop/incidents`, wrapRpc({
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/incidents`, {
     stop_id: stopId,
     incident_type_id: incidentTypeId,
     notes,
-  }));
-  const result = response.data?.result || response.data;
+  });
   return !!result;
 }
 
@@ -99,18 +98,19 @@ export async function uploadStopImage(
   imageBase64: string,
   imageType: string = 'visit'
 ): Promise<boolean> {
-  const response = await api.post(`${GF_BASE}/stop/images`, wrapRpc({
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/images`, {
     stop_id: stopId,
     image_base64: imageBase64,
     image_type: imageType,
-  }));
-  const result = response.data?.result || response.data;
+  });
   return !!result;
 }
 
+// ═══ Session ═══
+
 export async function signOut(): Promise<void> {
   try {
-    await api.post(`${GF_BASE}/sign_out`, wrapRpc());
+    await postRest(`${GF_BASE}/sign_out`);
   } catch {
     // Best effort
   }
