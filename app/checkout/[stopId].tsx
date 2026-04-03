@@ -39,6 +39,7 @@ export default function CheckoutScreen() {
 
   const [sendMessages, setSendMessages] = React.useState(true);
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
+  const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
 
   if (!stop) {
     return (
@@ -59,6 +60,9 @@ export default function CheckoutScreen() {
   const totalKg = saleTotalKg();
 
   async function handleCheckout() {
+    if (checkingOut) return; // Guard: prevent double-tap
+    setCheckingOut(true);
+
     const lat = latitude || 0;
     const lon = longitude || 0;
 
@@ -253,6 +257,8 @@ export default function CheckoutScreen() {
             variant="success"
             onPress={handleCheckout}
             fullWidth
+            disabled={checkingOut}
+            loading={checkingOut}
           />
           {nextStop && (
             <Button

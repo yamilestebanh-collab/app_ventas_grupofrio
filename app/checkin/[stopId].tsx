@@ -47,6 +47,7 @@ export default function CheckinScreen() {
 
   const [gpsLoading, setGpsLoading] = useState(true);
   const [checkedIn, setCheckedIn] = useState(phase === 'checked_in' || phase === 'selling' || phase === 'no_selling');
+  const [checkingIn, setCheckingIn] = useState(false); // Prevent double-tap
 
   // Timer tick
   useEffect(() => {
@@ -88,7 +89,7 @@ export default function CheckinScreen() {
 
   // Check-in handler — only if geofence OK
   async function handleCheckIn() {
-    if (!stop) return;
+    if (!stop || checkingIn) return; // Guard: prevent double-tap
     if (!isWithinFence && stop.customer_latitude && stop.customer_longitude) {
       Alert.alert(
         'Fuera de rango',
@@ -97,6 +98,8 @@ export default function CheckinScreen() {
       );
       return;
     }
+
+    setCheckingIn(true); // Lock immediately
 
     const lat = latitude || 0;
     const lon = longitude || 0;
@@ -124,6 +127,7 @@ export default function CheckinScreen() {
         timestamp: Date.now(),
       });
     }
+    // Note: checkingIn stays true — screen transitions to post-checkin state
   }
 
   if (!stop) {
@@ -209,7 +213,7 @@ export default function CheckinScreen() {
             label={gpsLoading ? 'Obteniendo GPS...' : canCheckIn ? '📍 Hacer Check-in' : `🔴 Fuera de rango (${Math.round(distanceMeters || 0)}m)`}
             onPress={handleCheckIn}
             fullWidth
-            disabled={!canCheckIn}
+            disabled={!canCheckIn || checkingIn}
             loading={gpsLoading}
             style={{ marginTop: 16 }}
           />

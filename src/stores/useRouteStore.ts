@@ -39,6 +39,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   progressPct: 0,
 
   loadPlan: async () => {
+    if (get().isLoading) return; // Prevent concurrent calls
     set({ isLoading: true, error: null });
     try {
       const plan = await getMyPlan();
