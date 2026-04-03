@@ -106,11 +106,7 @@ export async function postRest<T = any>(
 ): Promise<T> {
   const response = await api.post(url, data);
   // gf_logistics_ops REST endpoints may return data directly or in .result
-  const result = response.data?.result ?? response.data;
-  if (__DEV__ && response.status >= 400) {
-    console.warn(`[postRest] ${url} returned ${response.status}:`, result);
-  }
-  return result as T;
+  return (response.data?.result ?? response.data) as T;
 }
 
 /**

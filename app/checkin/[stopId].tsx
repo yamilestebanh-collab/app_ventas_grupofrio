@@ -104,11 +104,11 @@ export default function CheckinScreen() {
     const lat = latitude || 0;
     const lon = longitude || 0;
 
-    startVisit(stop, lat, lon);
-    updateStopState(stop.id, 'in_progress');
-    setCheckedIn(true);
-
     try {
+      startVisit(stop, lat, lon);
+      updateStopState(stop.id, 'in_progress');
+      setCheckedIn(true);
+
       if (isOnline) {
         await checkIn(stop.id, lat, lon);
       } else {
@@ -120,14 +120,19 @@ export default function CheckinScreen() {
         });
       }
     } catch {
+      // Server failed — enqueue for retry, keep visit started locally
       enqueue('checkin', {
         stop_id: stop.id,
         latitude: lat,
         longitude: lon,
         timestamp: Date.now(),
       });
+      if (!checkedIn) {
+        // Only reset lock if the visit didn't start (pre-startVisit failure)
+        setCheckingIn(false);
+      }
     }
-    // Note: checkingIn stays true — screen transitions to post-checkin state
+    // checkingIn stays true after success — screen transitions to post-checkin state
   }
 
   if (!stop) {

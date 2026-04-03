@@ -48,7 +48,7 @@ export async function checkIn(
   latitude: number,
   longitude: number
 ): Promise<boolean> {
-  const result = await postRest(`${GF_BASE}/stop/checkin`, {
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkin`, {
     stop_id: stopId,
     latitude,
     longitude,
@@ -61,7 +61,7 @@ export async function checkOut(
   latitude: number,
   longitude: number
 ): Promise<boolean> {
-  const result = await postRest(`${GF_BASE}/stop/checkout`, {
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, {
     stop_id: stopId,
     latitude,
     longitude,
@@ -85,7 +85,7 @@ export async function reportIncident(
   incidentTypeId: number,
   notes: string
 ): Promise<boolean> {
-  const result = await postRest(`${GF_BASE}/stop/incidents`, {
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/incidents`, {
     stop_id: stopId,
     incident_type_id: incidentTypeId,
     notes,
@@ -98,7 +98,7 @@ export async function uploadStopImage(
   imageBase64: string,
   imageType: string = 'visit'
 ): Promise<boolean> {
-  const result = await postRest(`${GF_BASE}/stop/images`, {
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/images`, {
     stop_id: stopId,
     image_base64: imageBase64,
     image_type: imageType,

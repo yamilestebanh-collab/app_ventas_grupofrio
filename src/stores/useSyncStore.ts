@@ -15,9 +15,10 @@
 import { create } from 'zustand';
 import { SyncQueueItem, SyncItemType, SyncItemStatus } from '../types/sync';
 import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
-import { api } from '../services/api';
+import { api, postRest, postRpc } from '../services/api';
 // F7: Photo base64 reading at sync time (not at enqueue)
 import { readPhotoAsBase64 } from '../services/camera';
+import { checkIn, checkOut, reportIncident, uploadStopImage } from '../services/gfLogistics';
 // V1.2.1: Inventory rollback on failed sales
 // CROSS-STORE DEP: rollback inventory on failed sale sync. Documented in V1.3.1.
 import { useProductStore } from './useProductStore';
@@ -209,62 +210,55 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
 
   switch (type) {
     case 'sale_order':
-      await api.post('/api/create_update', {
-        jsonrpc: '2.0',
-        params: {
-          model: 'sale.order',
-          method: 'create',
-          dict: {
-            partner_id: payload.partner_id,
-            order_line: (payload.lines as any[])?.map((l: any) => [
-              0, 0, {
-                product_id: l.product_id,
-                product_uom_qty: l.qty,
-                price_unit: l.price_unit,
-              },
-            ]) || [],
-          },
+      await postRpc('/api/create_update', {
+        model: 'sale.order',
+        method: 'create',
+        dict: {
+          partner_id: payload.partner_id,
+          order_line: (payload.lines as any[])?.map((l: any) => [
+            0, 0, {
+              product_id: l.product_id,
+              product_uom_qty: l.qty,
+              price_unit: l.price_unit,
+            },
+          ]) || [],
         },
       });
       break;
 
     case 'checkin':
-      await api.post('gf/logistics/api/employee/stop/checkin', {
-        stop_id: payload.stop_id,
-        latitude: payload.latitude,
-        longitude: payload.longitude,
-      });
+      await checkIn(
+        payload.stop_id as number,
+        payload.latitude as number,
+        payload.longitude as number,
+      );
       break;
 
     case 'checkout':
-      await api.post('gf/logistics/api/employee/stop/checkout', {
-        stop_id: payload.stop_id,
-        latitude: payload.latitude,
-        longitude: payload.longitude,
-      });
+      await checkOut(
+        payload.stop_id as number,
+        payload.latitude as number,
+        payload.longitude as number,
+      );
       break;
 
     case 'no_sale':
-      // Register as not_visited with reason
-      await api.post('gf/logistics/api/employee/stop/incidents', {
-        stop_id: payload.stop_id,
-        incident_type_id: payload.reason_id || 1,
-        notes: `No-venta: ${payload.reason_code || ''} ${payload.notes || ''}`.trim(),
-      });
+      await reportIncident(
+        payload.stop_id as number,
+        (payload.reason_id as number) || 1,
+        `No-venta: ${payload.reason_code || ''} ${payload.notes || ''}`.trim(),
+      );
       break;
 
     case 'payment':
-      await api.post('/api/create_update', {
-        jsonrpc: '2.0',
-        params: {
-          model: 'account.payment',
-          method: 'create',
-          dict: {
-            partner_id: payload.partner_id,
-            amount: payload.amount,
-            payment_type: 'inbound',
-            journal_id: payload.journal_id || null,
-          },
+      await postRpc('/api/create_update', {
+        model: 'account.payment',
+        method: 'create',
+        dict: {
+          partner_id: payload.partner_id,
+          amount: payload.amount,
+          payment_type: 'inbound',
+          journal_id: payload.journal_id || null,
         },
       });
       break;
@@ -277,39 +271,32 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         if (!fromFile) throw new Error('Photo file not found');
         base64 = fromFile;
       }
-      await api.post('gf/logistics/api/employee/stop/images', {
-        stop_id: payload.stop_id,
-        image_base64: base64,
-        image_type: payload.image_type || 'visit',
-      });
+      await uploadStopImage(
+        payload.stop_id as number,
+        base64,
+        (payload.image_type as string) || 'visit',
+      );
       break;
     }
 
     case 'gps':
-      await api.post('/api/create_update', {
-        jsonrpc: '2.0',
-        params: {
-          model: 'os.employee.gps.history',
-          method: 'create',
-          dict: {
-            employee_id: payload.employee_id,
-            latitude: payload.latitude,
-            longitude: payload.longitude,
-          },
+      await postRpc('/api/create_update', {
+        model: 'os.employee.gps.history',
+        method: 'create',
+        dict: {
+          employee_id: payload.employee_id,
+          latitude: payload.latitude,
+          longitude: payload.longitude,
         },
       });
       break;
 
     case 'prospection':
-      // Refill, unload, or other operational requests
       if (payload.model) {
-        await api.post('/api/create_update', {
-          jsonrpc: '2.0',
-          params: {
-            model: payload.model as string,
-            method: 'create',
-            dict: payload,
-          },
+        await postRpc('/api/create_update', {
+          model: payload.model as string,
+          method: 'create',
+          dict: payload,
         });
       }
       break;
@@ -348,23 +335,17 @@ async function checkSaleDuplicate(item: SyncQueueItem): Promise<boolean> {
   if (!opId) return false;
 
   try {
-    // Check if a sale.order with this operation ID already exists
-    // Uses the notes field or a custom field to track operation IDs
-    const response = await api.post('/get_records', {
-      jsonrpc: '2.0',
-      params: {
-        model: 'sale.order',
-        domain: [
-          ['partner_id', '=', item.payload.partner_id],
-          ['create_date', '>=', new Date(item.created_at - 300000).toISOString()], // 5 min window
-          ['create_date', '<=', new Date(item.created_at + 300000).toISOString()],
-        ],
-        fields: ['id', 'name', 'amount_total'],
-        limit: 1,
-      },
+    const existing = await postRpc<any[]>('/get_records', {
+      model: 'sale.order',
+      domain: [
+        ['partner_id', '=', item.payload.partner_id],
+        ['create_date', '>=', new Date(item.created_at - 300000).toISOString()],
+        ['create_date', '<=', new Date(item.created_at + 300000).toISOString()],
+      ],
+      fields: ['id', 'name', 'amount_total'],
+      limit: 1,
     });
 
-    const existing = response.data?.result;
     if (existing && existing.length > 0) {
       console.warn(
         `[sync] DUPLICATE detected: sale.order ${existing[0].name} already exists ` +

@@ -66,7 +66,6 @@ export default function CheckoutScreen() {
     const lat = latitude || 0;
     const lon = longitude || 0;
 
-    // Send checkout
     try {
       if (isOnline) {
         await checkOut(stop!.id, lat, lon);
