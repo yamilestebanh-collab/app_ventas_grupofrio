@@ -1,8 +1,5 @@
 /**
  * Root layout — providers, fonts, auth guard.
- * From KOLD_FIELD_ADDENDUM.md Bloque 1.
- *
- * AUDIT FIX: Uses @expo-google-fonts instead of local .ttf placeholders.
  */
 
 import { useEffect, useState } from 'react';
@@ -23,6 +20,7 @@ import {
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { hasAuthTokens } from '../src/services/api';
 import { colors } from '../src/theme/tokens';
+// Importamos con cuidado estos servicios
 import { rehydrateAppState } from '../src/services/rehydrate';
 import { startConnectivityMonitor, checkConnectivity } from '../src/services/connectivity';
 import { initializeGPS, startLocationWatch } from '../src/services/gps';
@@ -34,64 +32,75 @@ export default function RootLayout() {
   const segments = useSegments();
   const router = useRouter();
 
-  // Load fonts from Google Fonts packages
-  const [dmLoaded] = useDMSans({
+  // Load fonts
+  const [dmLoaded, dmError] = useDMSans({
     DMSans_300Light,
     DMSans_500Medium,
     DMSans_700Bold,
   });
-  const [monoLoaded] = useSpaceMono({
+  const [monoLoaded, monoError] = useSpaceMono({
     SpaceMono_400Regular,
     SpaceMono_700Bold,
   });
 
   const fontsLoaded = dmLoaded && monoLoaded;
 
-  // Check stored auth + rehydrate + connectivity on mount
   useEffect(() => {
     async function initApp() {
-      // 1. Check auth
-      const hasTokens = await hasAuthTokens();
-      if (hasTokens) {
-        useAuthStore.setState({ isAuthenticated: true });
-      }
+      console.log('[Init] Starting app initialization...');
+      try {
+        // 1. Check auth
+        const hasTokens = await hasAuthTokens();
+        console.log('[Init] Auth tokens found:', hasTokens);
+        if (hasTokens) {
+          useAuthStore.setState({ isAuthenticated: true });
+          
+          // 2. Rehydrate state
+          console.log('[Init] Rehydrating app state...');
+          await rehydrateAppState().catch(e => console.error('Rehydrate failed', e));
 
-      // 2. F6: Rehydrate persisted state
-      if (hasTokens) {
-        await rehydrateAppState();
-      }
-
-      // 3. F6: Start connectivity monitor
-      startConnectivityMonitor();
-      await checkConnectivity();
-
-      // 4. F7: Initialize GPS (request permissions)
-      if (hasTokens) {
-        await initializeGPS();
-        startLocationWatch();
-        // V1.1: Start background tracking (10 min interval)
-        // Requires expo prebuild — fails gracefully in Expo Go
-        try {
-          await startBackgroundTracking();
-        } catch {
-          console.log('[gps] Background tracking not available (needs prebuild)');
+          // 3. GPS Initialization (esto suele pedir permisos y trabar si no se responde)
+          console.log('[Init] Initializing GPS...');
+          await initializeGPS().catch(e => console.error('GPS init failed', e));
+          startLocationWatch();
+          
+          try {
+            await startBackgroundTracking();
+          } catch (e) {
+            console.log('[gps] Background tracking not available');
+          }
         }
-      }
 
-      setIsReady(true);
+        // 4. Connectivity monitor
+        console.log('[Init] Starting connectivity monitor...');
+        startConnectivityMonitor();
+        await checkConnectivity().catch(e => console.log('Connectivity check failed'));
+
+      } catch (error) {
+        console.error('[Init] Critical error during init:', error);
+      } finally {
+        console.log('[Init] App ready set to true');
+        setIsReady(true);
+      }
     }
     initApp();
   }, []);
 
-  // Auth guard: redirect based on auth state
+  // Auth guard
   useEffect(() => {
-    if (!isReady || !fontsLoaded) return;
+    if (!isReady || !fontsLoaded) {
+        console.log('[Guard] Waiting for ready/fonts...', { isReady, fontsLoaded });
+        return;
+    }
 
     const inAuthGroup = segments[0] === '(auth)';
+    console.log('[Guard] Current segments:', segments, 'IsAuthenticated:', isAuthenticated);
 
     if (!isAuthenticated && !inAuthGroup) {
+      console.log('[Guard] Redirecting to login');
       router.replace('/(auth)/login');
     } else if (isAuthenticated && inAuthGroup) {
+      console.log('[Guard] Redirecting to tabs');
       router.replace('/(tabs)');
     }
   }, [isReady, fontsLoaded, isAuthenticated, segments]);
@@ -99,7 +108,7 @@ export default function RootLayout() {
   if (!isReady || !fontsLoaded) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <ActivityIndicator size="large" color={colors?.primary || '#000'} />
         <StatusBar style="light" />
       </View>
     );
@@ -107,7 +116,7 @@ export default function RootLayout() {
 
   return (
     <>
-      <StatusBar style="light" backgroundColor={colors.bg} />
+      <StatusBar style="light" backgroundColor={colors?.bg || '#000'} />
       <Slot />
     </>
   );
@@ -116,7 +125,7 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   loading: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: '#0F1419',
     alignItems: 'center',
     justifyContent: 'center',
   },

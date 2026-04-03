@@ -1,6 +1,5 @@
 /**
  * GF Logistics API endpoints — production-tested (from xVan).
- * From xvan_audit.md + KOLD_FIELD_SPEC.md section 5.
  */
 
 import { api } from './api';
@@ -8,10 +7,24 @@ import { GFPlan, GFStop } from '../types/plan';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
+/**
+ * Helper to wrap Odoo JSON-RPC params.
+ */
+function wrapRpc(params: Record<string, any> = {}) {
+  return {
+    jsonrpc: '2.0',
+    params,
+  };
+}
+
 export async function getMyPlan(): Promise<GFPlan | null> {
   try {
-    const response = await api.post(`${GF_BASE}/my_plan`);
-    return response.data?.result || null;
+    // FIX: Envolver en JSON-RPC para evitar error 400
+    const response = await api.post(`${GF_BASE}/my_plan`, wrapRpc());
+    
+    // Odoo puede devolver el resultado en .data.result o .data si es REST puro
+    const result = response.data?.result || response.data;
+    return result || null;
   } catch (error) {
     console.warn('[gfLogistics] my_plan failed:', error);
     return null;
@@ -20,8 +33,9 @@ export async function getMyPlan(): Promise<GFPlan | null> {
 
 export async function getPlanStops(planId: number): Promise<GFStop[]> {
   try {
-    const response = await api.post(`${GF_BASE}/plan/stops`, { plan_id: planId });
-    return response.data?.result || [];
+    const response = await api.post(`${GF_BASE}/plan/stops`, wrapRpc({ plan_id: planId }));
+    const result = response.data?.result || response.data;
+    return Array.isArray(result) ? result : [];
   } catch (error) {
     console.warn('[gfLogistics] plan/stops failed:', error);
     return [];
@@ -33,12 +47,13 @@ export async function checkIn(
   latitude: number,
   longitude: number
 ): Promise<boolean> {
-  const response = await api.post(`${GF_BASE}/stop/checkin`, {
+  const response = await api.post(`${GF_BASE}/stop/checkin`, wrapRpc({
     stop_id: stopId,
     latitude,
     longitude,
-  });
-  return !!response.data?.result;
+  }));
+  const result = response.data?.result || response.data;
+  return !!result;
 }
 
 export async function checkOut(
@@ -46,18 +61,20 @@ export async function checkOut(
   latitude: number,
   longitude: number
 ): Promise<boolean> {
-  const response = await api.post(`${GF_BASE}/stop/checkout`, {
+  const response = await api.post(`${GF_BASE}/stop/checkout`, wrapRpc({
     stop_id: stopId,
     latitude,
     longitude,
-  });
-  return !!response.data?.result;
+  }));
+  const result = response.data?.result || response.data;
+  return !!result;
 }
 
 export async function getStopLines(stopId: number): Promise<unknown[]> {
   try {
-    const response = await api.post(`${GF_BASE}/stop/lines`, { stop_id: stopId });
-    return response.data?.result || [];
+    const response = await api.post(`${GF_BASE}/stop/lines`, wrapRpc({ stop_id: stopId }));
+    const result = response.data?.result || response.data;
+    return Array.isArray(result) ? result : [];
   } catch {
     return [];
   }
@@ -68,12 +85,13 @@ export async function reportIncident(
   incidentTypeId: number,
   notes: string
 ): Promise<boolean> {
-  const response = await api.post(`${GF_BASE}/stop/incidents`, {
+  const response = await api.post(`${GF_BASE}/stop/incidents`, wrapRpc({
     stop_id: stopId,
     incident_type_id: incidentTypeId,
     notes,
-  });
-  return !!response.data?.result;
+  }));
+  const result = response.data?.result || response.data;
+  return !!result;
 }
 
 export async function uploadStopImage(
@@ -81,18 +99,19 @@ export async function uploadStopImage(
   imageBase64: string,
   imageType: string = 'visit'
 ): Promise<boolean> {
-  const response = await api.post(`${GF_BASE}/stop/images`, {
+  const response = await api.post(`${GF_BASE}/stop/images`, wrapRpc({
     stop_id: stopId,
     image_base64: imageBase64,
     image_type: imageType,
-  });
-  return !!response.data?.result;
+  }));
+  const result = response.data?.result || response.data;
+  return !!result;
 }
 
 export async function signOut(): Promise<void> {
   try {
-    await api.post(`${GF_BASE}/sign_out`);
+    await api.post(`${GF_BASE}/sign_out`, wrapRpc());
   } catch {
-    // Best effort — clear local tokens regardless
+    // Best effort
   }
 }

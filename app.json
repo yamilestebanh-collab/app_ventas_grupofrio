@@ -16,20 +16,24 @@
       "supportsTablet": false,
       "bundleIdentifier": "mx.grupofrio.koldfield",
       "config": {
-        "googleMapsApiKey": "GOOGLE_MAPS_API_KEY"
+        "googleMapsApiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8"
       },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "KOLD Field necesita tu ubicacion para verificar visitas a clientes.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "KOLD Field usa GPS para tracking de ruta del vendedor.",
         "NSCameraUsageDescription": "KOLD Field necesita la camara para fotos de evidencia de visita.",
-        "UIBackgroundModes": ["location", "fetch"]
-      }
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
+      },
+      "appleTeamId": "NSPZ9L84H2"
     },
     "android": {
       "package": "mx.grupofrio.koldfield",
       "config": {
         "googleMaps": {
-          "apiKey": "GOOGLE_MAPS_API_KEY"
+          "apiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8"
         }
       },
       "adaptiveIcon": {
@@ -39,12 +43,13 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "CAMERA",
-        "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -68,10 +73,16 @@
         {
           "cameraPermission": "KOLD Field necesita la camara para fotos de visita."
         }
+      ],
+      [
+        "react-native-maps",
+        {
+          "googleMapsApiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8"
+        }
       ]
     ],
     "extra": {
-      "googleMapsApiKey": "GOOGLE_MAPS_API_KEY"
+      "googleMapsApiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8"
     }
   }
 }

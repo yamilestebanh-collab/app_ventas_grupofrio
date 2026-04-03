@@ -1,20 +1,9 @@
 /**
  * Home screen — s-home in mockup (lines 122-155).
  * Full implementation with real layout matching HTML.
- *
- * Layout from mockup:
- * - Status bar with GPS icon
- * - Sync bar (online/offline)
- * - Greeting + settings icon
- * - Weather card (optional)
- * - 4 KPI cards in 2x2 grid
- * - Alert banners (critical + warning)
- * - "Ruta del dia" section title + mini map
- * - "Proximas paradas" section title + StopCards
- * - Bottom nav
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -27,7 +16,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
-import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
+import { useKoldStore } from '../../src/stores/useKoldStore';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -42,17 +31,20 @@ export default function HomeScreen() {
     loadPlan();
   }, []);
 
-  // KOLD intelligence alerts
-  const koldAlerts = useKoldStore((s) => s.getAlerts());
+  // FIX: Acceder directamente al estado en lugar de llamar a una función que genera un nuevo array
+  const alerts = useKoldStore((s) => s.alerts);
+  const koldAlerts = useMemo(() => alerts || [], [alerts]);
 
   // Next stops (pending + in_progress, max 4)
-  const nextStops = stops
-    .filter((s) => ['pending', 'in_progress'].includes(s.state))
-    .slice(0, 4);
+  const nextStops = useMemo(() => 
+    stops
+      .filter((s) => ['pending', 'in_progress'].includes(s.state))
+      .slice(0, 4)
+  , [stops]);
 
   // Completed stops
-  const doneStops = stops.filter((s) => s.state === 'done');
-  const todaySales = doneStops.length; // F4: real aggregation
+  const doneStops = useMemo(() => stops.filter((s) => s.state === 'done'), [stops]);
+  const todaySales = doneStops.length;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -80,7 +72,7 @@ export default function HomeScreen() {
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-        {/* Weather card (mockup .wb class) */}
+        {/* Weather card */}
         <View style={styles.weatherCard}>
           <Text style={{ fontSize: 26 }}>☀️</Text>
           <View style={{ flex: 1 }}>
@@ -118,7 +110,7 @@ export default function HomeScreen() {
           />
         </View>
 
-        {/* Intelligence alerts from KoldScore */}
+        {/* Intelligence alerts */}
         {koldAlerts.slice(0, 3).map((alert, idx) => (
           <AlertBanner
             key={idx}
@@ -176,7 +168,7 @@ export default function HomeScreen() {
           ))
         )}
 
-        {/* Done stops (collapsed) */}
+        {/* Done stops */}
         {doneStops.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>COMPLETADAS ({doneStops.length})</Text>
@@ -242,7 +234,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.screenPadding,
     paddingBottom: 100,
   },
-  // Weather card (.wb in mockup)
   weatherCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -272,14 +263,12 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: colors.textDim,
   },
-  // KPI grid
   kpiGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
     marginBottom: 14,
   },
-  // Section title (.st in mockup)
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',
@@ -289,7 +278,6 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 8,
   },
-  // Map preview (.mp in mockup)
   mapPreview: {
     width: '100%',
     height: 160,
@@ -313,7 +301,6 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     marginTop: 2,
   },
-  // Progress
   progressContainer: {
     backgroundColor: colors.card,
     borderRadius: radii.card,
@@ -343,7 +330,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: colors.primary,
   },
-  // Empty state
   emptyCard: {
     backgroundColor: colors.card,
     borderRadius: radii.card,

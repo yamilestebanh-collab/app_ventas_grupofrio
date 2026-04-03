@@ -3,29 +3,32 @@
  * Shows KoldScore alerts + demand alerts + operational alerts.
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
-import { Badge } from '../../src/components/ui/Badge';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
-import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
+import { useKoldStore } from '../../src/stores/useKoldStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 
 export default function AlertsScreen() {
   const router = useRouter();
-  const koldAlerts = useKoldStore((s) => s.getAlerts());
+  
+  // FIX: Acceder directamente a las alertas y usar useMemo
+  const alerts = useKoldStore((s) => s.alerts);
+  const koldAlerts = useMemo(() => alerts || [], [alerts]);
+  
   const scoreAvailable = useKoldStore((s) => s.scoreModuleAvailable);
   const { pendingCount, errorCount } = useSyncStore();
   const { stopsTotal, stopsCompleted } = useRouteStore();
 
-  const criticalAlerts = koldAlerts.filter((a) => a.type === 'critical');
-  const warningAlerts = koldAlerts.filter((a) => a.type === 'warning');
-  const opportunityAlerts = koldAlerts.filter((a) => a.type === 'opportunity');
+  const criticalAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'critical'), [koldAlerts]);
+  const warningAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'warning'), [koldAlerts]);
+  const opportunityAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'opportunity'), [koldAlerts]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
