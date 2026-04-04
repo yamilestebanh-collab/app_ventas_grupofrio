@@ -1,9 +1,7 @@
 /**
- * Axios instance with KOLD Field interceptors.
- * From KOLD_FIELD_SPEC.md section 4 + xvan_audit.md.
- *
- * Headers required by gf_logistics_ops:
- *   Api-Key, api_key, X-GF-Employee-Token, Content-Type
+ * HTTP helpers for KOLD Field.
+ * Login still uses Axios, but postRest/postRpc use fetch on Android
+ * to avoid native XHR failures that surfaced as generic "Network Error".
  */
 
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
@@ -15,16 +13,55 @@ const STORE_KEYS = {
   GF_TOKEN: 'kf_gf_token',
 } as const;
 
-let _baseUrl = '';
+export const DEFAULT_BASE_URL = 'https://grupofrio.odoo.com';
+
+let _baseUrl = DEFAULT_BASE_URL;
+
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, '').trim();
+}
+
+function safeParseJson(text: string): any {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text.slice(0, 200) };
+  }
+}
+
+async function buildAbsoluteUrl(url: string): Promise<string> {
+  if (url.startsWith('http')) return url;
+  const baseUrl = await getBaseUrl();
+  return `${baseUrl}/${url.replace(/^\//, '')}`;
+}
+
+async function buildHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  const apiKey = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
+  const gfToken = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
+
+  if (apiKey) {
+    headers['Api-Key'] = sanitizeHeaderValue(apiKey);
+  }
+  if (gfToken) {
+    headers['X-GF-Employee-Token'] = sanitizeHeaderValue(gfToken);
+  }
+
+  return headers;
+}
 
 export async function setBaseUrl(url: string) {
-  _baseUrl = url.replace(/\/+$/, '');
+  _baseUrl = url.replace(/\/+$/, '') || DEFAULT_BASE_URL;
   await SecureStore.setItemAsync(STORE_KEYS.BASE_URL, _baseUrl);
 }
 
 export async function getBaseUrl(): Promise<string> {
   if (_baseUrl) return _baseUrl;
-  _baseUrl = (await SecureStore.getItemAsync(STORE_KEYS.BASE_URL)) || '';
+  _baseUrl = (await SecureStore.getItemAsync(STORE_KEYS.BASE_URL)) || DEFAULT_BASE_URL;
   return _baseUrl;
 }
 
@@ -34,14 +71,19 @@ export async function setAuthTokens(apiKey: string, gfToken: string) {
 }
 
 export async function clearAuthTokens() {
+  _baseUrl = DEFAULT_BASE_URL;
   await SecureStore.deleteItemAsync(STORE_KEYS.API_KEY);
   await SecureStore.deleteItemAsync(STORE_KEYS.GF_TOKEN);
   await SecureStore.deleteItemAsync(STORE_KEYS.BASE_URL);
 }
 
 export async function hasAuthTokens(): Promise<boolean> {
-  const key = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
-  return !!key;
+  const [apiKey, gfToken] = await Promise.all([
+    SecureStore.getItemAsync(STORE_KEYS.API_KEY),
+    SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN),
+  ]);
+
+  return !!apiKey && !!gfToken;
 }
 
 /**
@@ -65,11 +107,10 @@ export function createApiClient(): AxiosInstance {
     const gfToken = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
 
     if (apiKey) {
-      config.headers.set('Api-Key', apiKey);
-      config.headers.set('api_key', apiKey);
+      config.headers.set('Api-Key', sanitizeHeaderValue(apiKey));
     }
     if (gfToken) {
-      config.headers.set('X-GF-Employee-Token', gfToken);
+      config.headers.set('X-GF-Employee-Token', sanitizeHeaderValue(gfToken));
     }
 
     return config;
@@ -104,9 +145,21 @@ export async function postRest<T = any>(
   url: string,
   data: Record<string, unknown> = {}
 ): Promise<T> {
-  const response = await api.post(url, data);
+  const response = await fetch(await buildAbsoluteUrl(url), {
+    method: 'POST',
+    headers: await buildHeaders(),
+    body: JSON.stringify(data),
+  });
+
+  const text = await response.text();
+  const parsed = safeParseJson(text);
+  if (!response.ok) {
+    const msg = parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+
   // gf_logistics_ops REST endpoints may return data directly or in .result
-  return (response.data?.result ?? response.data) as T;
+  return (parsed?.result ?? parsed) as T;
 }
 
 /**
@@ -118,13 +171,54 @@ export async function postRpc<T = any>(
   url: string,
   params: Record<string, unknown> = {}
 ): Promise<T> {
-  const response = await api.post(url, {
-    jsonrpc: '2.0',
-    params,
+  const response = await fetch(await buildAbsoluteUrl(url), {
+    method: 'POST',
+    headers: await buildHeaders(),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      params,
+    }),
   });
-  if (response.data?.error) {
-    const errMsg = response.data.error?.data?.message || response.data.error?.message || 'Odoo RPC error';
+
+  const text = await response.text();
+  const parsed = safeParseJson(text);
+  if (!response.ok) {
+    const errMsg = parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`;
     throw new Error(errMsg);
   }
-  return response.data?.result as T;
+  if (parsed?.error) {
+    const errMsg = parsed.error?.data?.message || parsed.error?.message || 'Odoo RPC error';
+    throw new Error(errMsg);
+  }
+  return parsed?.result as T;
+}
+
+/**
+ * POST to the legacy /jsonrpc endpoint using method: "call".
+ */
+export async function postJsonRpc<T = any>(
+  url: string,
+  params: Record<string, unknown> = {}
+): Promise<T> {
+  const response = await fetch(await buildAbsoluteUrl(url), {
+    method: 'POST',
+    headers: await buildHeaders(),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params,
+    }),
+  });
+
+  const text = await response.text();
+  const parsed = safeParseJson(text);
+  if (!response.ok) {
+    const errMsg = parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`;
+    throw new Error(errMsg);
+  }
+  if (parsed?.error) {
+    const errMsg = parsed.error?.data?.message || parsed.error?.message || 'Odoo RPC error';
+    throw new Error(errMsg);
+  }
+  return parsed?.result as T;
 }

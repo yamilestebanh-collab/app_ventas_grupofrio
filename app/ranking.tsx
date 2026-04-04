@@ -17,7 +17,7 @@ import { Badge } from '../src/components/ui/Badge';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useAuthStore } from '../src/stores/useAuthStore';
-import { api } from '../src/services/api';
+import { postRpc } from '../src/services/api';
 
 interface RankingEntry {
   employee_id: number;
@@ -45,23 +45,18 @@ export default function RankingScreen() {
   const fetchRanking = useCallback(async () => {
     try {
       setError(null);
-      const response = await api.post('/get_records', {
-        jsonrpc: '2.0',
-        params: {
-          model: 'sale.order',
-          method: 'read_group',
-          domain: [
-            ['state', 'in', ['sale', 'done']],
-            ['date_order', '>=', getFirstDayOfMonth()],
-          ],
-          fields: ['user_id', 'amount_total:sum', 'partner_id:count_distinct'],
-          groupby: ['user_id'],
-          orderby: 'amount_total desc',
-          limit: 50,
-        },
+      const groups = await postRpc<any[]>('/get_records', {
+        model: 'sale.order',
+        method: 'read_group',
+        domain: [
+          ['state', 'in', ['sale', 'done']],
+          ['date_order', '>=', getFirstDayOfMonth()],
+        ],
+        fields: ['user_id', 'amount_total:sum', 'partner_id:count_distinct'],
+        groupby: ['user_id'],
+        orderby: 'amount_total desc',
+        limit: 50,
       });
-
-      const groups = response.data?.result || [];
 
       // Build ranking from real data
       const entries: RankingEntry[] = groups

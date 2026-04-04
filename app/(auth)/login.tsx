@@ -10,12 +10,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../src/stores/useAuthStore';
+import { DEFAULT_BASE_URL } from '../../src/services/api';
 import { Button } from '../../src/components/ui/Button';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 
 // Default values — configurable in settings (F8)
-const DEFAULT_BASE_URL = 'https://grupofrio.odoo.com';
 const DEFAULT_DB = 'grupofrio-grupofrio-20239580';
 
 export default function LoginScreen() {

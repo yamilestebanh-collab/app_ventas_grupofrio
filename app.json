@@ -73,12 +73,6 @@
         {
           "cameraPermission": "KOLD Field necesita la camara para fotos de visita."
         }
-      ],
-      [
-        "react-native-maps",
-        {
-          "googleMapsApiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8"
-        }
       ]
     ],
     "extra": {
