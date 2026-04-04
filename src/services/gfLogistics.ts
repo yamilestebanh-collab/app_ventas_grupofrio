@@ -21,8 +21,19 @@ const GF_BASE = 'gf/logistics/api/employee';
 
 export async function getMyPlan(): Promise<GFPlan | null> {
   try {
-    const result = await postRest<GFPlan | null>(`${GF_BASE}/my_plan`);
-    return result || null;
+    // BLD-20260404-007: Backend wraps response in { ok, message, data }.
+    // When found=false, the employee has no plan assigned for today.
+    const result = await postRest<any>(`${GF_BASE}/my_plan`);
+    if (!result || typeof result !== 'object') return null;
+    if (result.ok === false) {
+      console.warn('[gfLogistics] my_plan returned ok=false:', result.message);
+      return null;
+    }
+    // Support both wrapped ({ok, data}) and unwrapped (GFPlan direct) responses.
+    const data = result.data !== undefined ? result.data : result;
+    if (!data || data.found === false) return null;
+    // data may be the plan itself or wrap it in data.plan.
+    return (data.plan ?? data) as GFPlan;
   } catch (error) {
     console.warn('[gfLogistics] my_plan failed:', error);
     return null;
