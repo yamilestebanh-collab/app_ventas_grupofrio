@@ -7,7 +7,6 @@
  */
 
 import { create } from 'zustand';
-import { api } from '../services/api';
 import { setAuthTokens, clearAuthTokens, setBaseUrl } from '../services/api';
 import { signOut } from '../services/gfLogistics';
 
@@ -123,14 +122,45 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await setBaseUrl(baseUrl);
 
-      const response = await api.post(`${baseUrl}/api/employee-sign-in`, {
-        jsonrpc: '2.0',
-        params: { barcode, pin, db },
-      });
+      // BLD-20260404-007 (Fix 4): Use fetch instead of axios.
+      // Axios XHR adapter fails with generic Network Error on some Android
+      // devices running React Native 0.76. The postRest/postRpc helpers already
+      // use fetch for the same reason — login must too.
+      let response: Response;
+      try {
+        response = await fetch(`${baseUrl}/api/employee-sign-in`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            params: { barcode, pin, db },
+          }),
+        });
+      } catch (netErr) {
+        const msg = netErr instanceof Error ? netErr.message : 'Error de red';
+        console.warn('[login] Network error:', msg);
+        set({ error: 'Sin conexion al servidor. Verifica tu red.', isLoading: false });
+        return false;
+      }
 
-      const result = response.data?.result;
+      if (!response.ok) {
+        console.warn('[login] HTTP error:', response.status);
+        set({ error: `Error del servidor (${response.status})`, isLoading: false });
+        return false;
+      }
+
+      let payload: any;
+      try {
+        payload = await response.json();
+      } catch {
+        set({ error: 'Respuesta del servidor invalida', isLoading: false });
+        return false;
+      }
+
+      const result = payload?.result;
       if (!result?.api_key) {
-        set({ error: 'Credenciales incorrectas', isLoading: false });
+        const backendMsg = result?.message || payload?.error?.data?.message;
+        set({ error: backendMsg || 'Credenciales incorrectas', isLoading: false });
         return false;
       }
 
