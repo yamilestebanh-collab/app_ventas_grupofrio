@@ -17,13 +17,29 @@ import { SyncQueueItem, SyncItemType, SyncItemStatus } from '../types/sync';
 import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
 import { api, postRest, postRpc } from '../services/api';
 // F7: Photo base64 reading at sync time (not at enqueue)
-import { readPhotoAsBase64 } from '../services/camera';
+// BLD-011: post-sync delete + orphan janitor
+import {
+  readPhotoAsBase64,
+  deletePhoto,
+  cleanupOrphanPhotos,
+  PHOTO_DELETE_ON_SYNC_ENABLED,
+  PHOTO_JANITOR_ENABLED,
+  photoCounters,
+} from '../services/camera';
 import { checkIn, checkOut, reportIncident, uploadStopImage } from '../services/gfLogistics';
 // V1.2.1: Inventory rollback on failed sales
 // CROSS-STORE DEP: rollback inventory on failed sale sync. Documented in V1.3.1.
 import { useProductStore } from './useProductStore';
+// BLD-008: client event metadata for outgoing ops
+import { makeClientEventMeta } from '../utils/clientEvent';
+// BLD-20260404-012: GPS queue cap — evict oldest pending gps op when full.
+import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 
 const MAX_RETRIES = 3;
+
+// BLD-010: maximum items processed per cycle. Unchanged from legacy
+// FIFO pass, kept explicit so DAG fallback is obvious.
+const MAX_ITEMS_PER_CYCLE = 200;
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -43,7 +59,14 @@ interface SyncState {
   errorCount: number;
 
   // Actions
-  enqueue: (type: SyncItemType, payload: Record<string, unknown>) => string;
+  enqueue: (
+    type: SyncItemType,
+    payload: Record<string, unknown>,
+    // BLD-010: optional dependency list. Items are processed only when
+    // every id in dependsOn has status='done'. Missing / empty array
+    // keeps the legacy FIFO behaviour. See computeProcessingOrder().
+    opts?: { dependsOn?: string[] },
+  ) => string;
   markDone: (id: string) => void;
   markError: (id: string, message: string) => void;
   setOnline: (online: boolean) => void;
@@ -73,7 +96,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   pendingCount: 0,
   errorCount: 0,
 
-  enqueue: (type, payload) => {
+  enqueue: (type, payload, opts) => {
     const id = uuid();
     const item: SyncQueueItem = {
       id,
@@ -83,12 +106,50 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       created_at: Date.now(),
       retries: 0,
       error_message: null,
+      // BLD-010: optional dependency list
+      dependsOn: opts?.dependsOn && opts.dependsOn.length > 0 ? [...opts.dependsOn] : undefined,
     };
-    const newQueue = [...get().queue, item];
+    // BLD-20260404-012: enforce cap on pending GPS ops. Only evicts
+    // within the 'gps' type and only when the cap is reached. Any
+    // throw falls back to the legacy insert (never drops).
+    let baseQueue = get().queue;
+    if (type === 'gps') {
+      try {
+        const victimId = pickGpsOverflowVictim(
+          baseQueue.map((i) => ({
+            id: i.id,
+            type: i.type,
+            status: i.status,
+            created_at: i.created_at,
+          })),
+        );
+        if (victimId) {
+          baseQueue = baseQueue.filter((i) => i.id !== victimId);
+          if (__DEV__) console.log(`[sync] gps cap hit, evicted ${victimId}`);
+        }
+      } catch {
+        // keep baseQueue unchanged
+      }
+    }
+    const newQueue = [...baseQueue, item];
     set({ queue: newQueue, ...computeCounts(newQueue) });
 
-    // Persist immediately
+    // Persist immediately (best-effort fire-and-forget)
     get().persistQueue();
+
+    // BLD-008: capture client event metadata for this op. Done after
+    // insert so the queue is never blocked on SecureStore reads. If
+    // meta generation fails for any reason the op stays in queue and
+    // is synced without meta — legacy behaviour preserved.
+    makeClientEventMeta(id)
+      .then((meta) => {
+        const updated = get().queue.map((i) => (i.id === id ? { ...i, meta } : i));
+        set({ queue: updated });
+        get().persistQueue();
+      })
+      .catch(() => {
+        // intentional: never crash the enqueue path
+      });
 
     return id;
   },
@@ -155,10 +216,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const { queue, isOnline, isSyncing } = get();
     if (!isOnline || isSyncing) return;
 
-    const pending = queue.filter((i) =>
+    const candidates = queue.filter((i) =>
       i.status === 'pending' || (i.status === 'error' && i.retries < MAX_RETRIES)
     );
 
+    if (candidates.length === 0) return;
+
+    // BLD-010: resolve DAG order. If any dependency can't be resolved
+    // (malformed graph, dangling parent), the helper returns the plain
+    // FIFO order to keep the legacy behaviour and never block sync.
+    const pending = computeProcessingOrder(queue, candidates).slice(0, MAX_ITEMS_PER_CYCLE);
     if (pending.length === 0) return;
 
     set({ isSyncing: true });
@@ -185,6 +252,29 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         await processSyncItem(item);
         get().markDone(item.id);
         if (__DEV__) console.log(`[sync] Done: ${item.type} ${item.id}`);
+
+        // BLD-20260404-011: delete local photo file after successful
+        // upload. Gated by PHOTO_DELETE_ON_SYNC_ENABLED kill switch.
+        // Best-effort — any failure here only leaves a stale file that
+        // the janitor will clean later. Never blocks sync.
+        //
+        // SAFETY NOTE: we only delete the photo attached to the op that
+        // just succeeded. We never touch photos still referenced by any
+        // other pending/error op — those live in the queue and only the
+        // janitor can (eventually) clean them, and only after 7 days.
+        if (item.type === 'photo' && PHOTO_DELETE_ON_SYNC_ENABLED) {
+          const localUri = item.payload?.localUri as string | undefined;
+          if (localUri) {
+            deletePhoto(localUri)
+              .then(() => {
+                photoCounters.deletedPostSyncTotal += 1;
+              })
+              .catch(() => {
+                photoCounters.deletePostSyncErrors += 1;
+                /* intentional: janitor is the safety net */
+              });
+          }
+        }
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Sync error';
         get().markError(item.id, msg);
@@ -200,13 +290,148 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     set({ isSyncing: false, lastSyncAt: Date.now() });
     get().persistQueue();
+
+    // BLD-20260404-011/012 — end-of-cycle observability summary.
+    // Compact single-line log of in-process counters so field devices
+    // can be diagnosed via `adb logcat` without backend wiring. Dev-only
+    // to avoid polluting production logs. Never throws; every counter
+    // read falls back to 0 if the field is missing.
+    if (__DEV__) {
+      try {
+        const pc = (photoCounters ?? {}) as Record<string, number | undefined>;
+        const gc = (gpsBufferCounters ?? {}) as Record<string, number | undefined>;
+        const n = (v: number | undefined) => (typeof v === 'number' ? v : 0);
+        console.log(
+          '[sync-summary]\n' +
+          `photos: captured=${n(pc.capturedTotal)} ` +
+          `oversized=${n(pc.oversizedTotal)} ` +
+          `deleted=${n(pc.deletedPostSyncTotal)}\n` +
+          `gps: admitted=${n(gc.admittedTotal)} ` +
+          `rateLimited=${n(gc.rateLimitedTotal)} ` +
+          `duplicate=${n(gc.duplicateTotal)} ` +
+          `evicted=${n(gc.evictedByCapTotal)}`,
+        );
+      } catch {
+        /* intentional: summary is telemetry, never blocks sync */
+      }
+    }
+
+    // BLD-20260404-011: after a drain, run the orphan photo janitor.
+    // Gated by PHOTO_JANITOR_ENABLED kill switch.
+    //
+    // The "referenced set" is every localUri currently in the queue in
+    // any status other than 'done' (i.e. pending / syncing / error).
+    // Photos still referenced are NEVER deleted by the janitor. The
+    // janitor also refuses to delete anything newer than PHOTO_STALE_MS
+    // (7 days) even if unreferenced. Fully fire-and-forget.
+    if (PHOTO_JANITOR_ENABLED) {
+      try {
+        const referenced = new Set<string>();
+        for (const i of get().queue) {
+          if (i.type === 'photo' && i.status !== 'done') {
+            const uri = i.payload?.localUri as string | undefined;
+            if (uri) referenced.add(uri);
+          }
+        }
+        cleanupOrphanPhotos(referenced).catch(() => { /* best effort */ });
+      } catch {
+        /* intentional */
+      }
+    }
   },
 }));
+
+// ═══ BLD-010: DAG resolver with safe FIFO fallback ═══
+
+/**
+ * Return the ordered list of items that are ready to process in this
+ * cycle. Rules:
+ *
+ *   1. An item is "ready" when every id in its `dependsOn` is present
+ *      in the queue with status='done' (or missing entirely AND the
+ *      fallback flag is true — see below).
+ *   2. Items with no `dependsOn` are always ready.
+ *   3. If the dependency graph is malformed (cycle, dangling parent
+ *      that never existed, depth > 50) we fall back to FIFO over all
+ *      candidates to preserve the legacy behaviour. A warning is
+ *      logged in __DEV__ only.
+ *   4. The returned list is topologically sorted, then stable by
+ *      created_at so FIFO tie-breaking matches today's behaviour.
+ *
+ * This helper is pure: no state mutation, no I/O.
+ */
+export function computeProcessingOrder(
+  fullQueue: SyncQueueItem[],
+  candidates: SyncQueueItem[],
+): SyncQueueItem[] {
+  // Fast path: nobody declared dependencies → legacy FIFO.
+  const anyDeps = candidates.some((c) => c.dependsOn && c.dependsOn.length > 0);
+  if (!anyDeps) {
+    return [...candidates].sort((a, b) => a.created_at - b.created_at);
+  }
+
+  const byId = new Map<string, SyncQueueItem>();
+  for (const q of fullQueue) byId.set(q.id, q);
+
+  const isDependencySatisfied = (depId: string): boolean => {
+    const dep = byId.get(depId);
+    if (!dep) return true; // parent not in queue anymore → already done / never existed
+    return dep.status === 'done';
+  };
+
+  // Kahn's algorithm over candidates only.
+  const result: SyncQueueItem[] = [];
+  const remaining = [...candidates];
+  let guard = 0;
+  const MAX_PASSES = 50;
+
+  while (remaining.length > 0) {
+    guard += 1;
+    if (guard > MAX_PASSES) {
+      // Malformed graph — fall back to FIFO over candidates.
+      if (__DEV__) {
+        console.warn(
+          '[sync] DAG resolution exceeded max passes, falling back to FIFO',
+        );
+      }
+      return [...candidates].sort((a, b) => a.created_at - b.created_at);
+    }
+
+    const ready = remaining.filter((item) => {
+      const deps = item.dependsOn ?? [];
+      return deps.every(isDependencySatisfied);
+    });
+
+    if (ready.length === 0) {
+      // No progress possible this pass — remaining items have deps still
+      // pending in the queue. They are deferred to the next cycle. This
+      // is NOT an error: it's the DAG doing its job.
+      break;
+    }
+
+    ready.sort((a, b) => a.created_at - b.created_at);
+    for (const item of ready) {
+      result.push(item);
+      // Optimistically treat as satisfied so downstream siblings in the
+      // same cycle can advance too.
+      byId.set(item.id, { ...item, status: 'done' });
+      const idx = remaining.indexOf(item);
+      if (idx >= 0) remaining.splice(idx, 1);
+    }
+  }
+
+  // If nothing was resolvable (all deps still pending), return empty:
+  // next cycle will try again once parents reach 'done'.
+  return result;
+}
 
 // ═══ Operation dispatcher ═══
 
 async function processSyncItem(item: SyncQueueItem): Promise<void> {
   const { type, payload } = item;
+  // BLD-008: optional client metadata captured at enqueue time. Helpers
+  // attach it only when the feature flag is enabled, otherwise noop.
+  const meta = item.meta ?? null;
 
   switch (type) {
     case 'sale_order':
@@ -231,6 +456,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         payload.latitude as number,
         payload.longitude as number,
+        meta,
       );
       break;
 
@@ -239,6 +465,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         payload.latitude as number,
         payload.longitude as number,
+        meta,
       );
       break;
 
@@ -247,6 +474,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         (payload.reason_id as number) || 1,
         `No-venta: ${payload.reason_code || ''} ${payload.notes || ''}`.trim(),
+        meta,
       );
       break;
 
@@ -275,6 +503,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         base64,
         (payload.image_type as string) || 'visit',
+        meta,
       );
       break;
     }

@@ -14,6 +14,8 @@ import { create } from 'zustand';
 import { Product } from '../types/product';
 import { odooRead } from '../services/odooRpc';
 import { storeSave, STORAGE_KEYS } from '../persistence/storage';
+// BLD-20260404-013: try warehouse-scoped endpoint, fall back to odooRead
+import { fetchTruckStock } from '../services/gfLogistics';
 
 export interface TruckProduct extends Product {
   // Computed at load time
@@ -72,18 +74,44 @@ export const useProductStore = create<ProductState>((set, get) => ({
   loadProducts: async (warehouseId: number) => {
     set({ isLoading: true, error: null });
     try {
-      // Load products with stock from Odoo
-      const rawProducts = await odooRead<Product>(
-        'product.product',
-        [
-          ['sale_ok', '=', true],
-          ['type', '!=', 'service'],
-          ['active', '=', true],
-        ],
-        ['id', 'name', 'default_code', 'list_price', 'qty_available',
-         'sale_ok', 'product_tmpl_id', 'weight', 'categ_id'],
-        200
-      );
+      // BLD-20260404-013: Prefer the warehouse-scoped REST endpoint
+      // (Sprint 3 P4 / P3 inventory model). It returns products already
+      // scoped to the chofer's assigned warehouse, so qty_available is
+      // correct in multi-warehouse tenants. If the endpoint is not yet
+      // deployed, `fetchTruckStock` returns `null` and we transparently
+      // fall back to the legacy `odooRead` path. This is a no-op for
+      // single-warehouse tenants.
+      let rawProducts: Product[] | null = null;
+      const scoped = await fetchTruckStock(warehouseId);
+      if (scoped && scoped.length >= 0) {
+        rawProducts = scoped as Product[];
+        if (__DEV__) console.log(`[products] loaded via truck_stock (warehouse=${warehouseId}, n=${rawProducts.length})`);
+      }
+
+      if (!rawProducts) {
+        // BLD-20260404-013 — observability: log fallback transition so
+        // we can tell from field device logs whether the scoped endpoint
+        // is being used or not. Pure telemetry, does not change logic.
+        console.warn(
+          `[warehouse] truck_stock fallback triggered → using odooRead ` +
+          `(warehouseId=${warehouseId})`,
+        );
+        // Legacy path — unchanged behaviour. Note: qty_available here is
+        // computed in the default company context, NOT scoped to the
+        // chofer's warehouse. BLD-013 documents this as acceptable
+        // fallback until the truck_stock endpoint is deployed.
+        rawProducts = await odooRead<Product>(
+          'product.product',
+          [
+            ['sale_ok', '=', true],
+            ['type', '!=', 'service'],
+            ['active', '=', true],
+          ],
+          ['id', 'name', 'default_code', 'list_price', 'qty_available',
+           'sale_ok', 'product_tmpl_id', 'weight', 'categ_id'],
+          200
+        );
+      }
 
       // Enrich with weight estimation
       const products: TruckProduct[] = rawProducts

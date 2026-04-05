@@ -98,4 +98,7 @@ export const STORAGE_KEYS = {
 
   // Timestamps
   LAST_FULL_SYNC: 'meta:lastFullSync',
+
+  // BLD-20260404-009: truck inventory snapshots (visibility only)
+  TRUCK_INVENTORY_SNAPSHOTS: 'inventory:truckSnapshots',
 } as const;

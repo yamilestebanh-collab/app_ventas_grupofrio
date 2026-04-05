@@ -17,6 +17,8 @@ import { useRouteStore } from '../stores/useRouteStore';
 import { useProductStore } from '../stores/useProductStore';
 import { GFPlan, GFStop } from '../types/plan';
 import { TruckProduct } from '../stores/useProductStore';
+// BLD-20260404-009: truck inventory snapshots (visibility scaffold)
+import { useTruckInventoryStore } from '../stores/useTruckInventoryStore';
 
 export async function rehydrateAppState(): Promise<{
   queueSize: number;
@@ -69,6 +71,14 @@ export async function rehydrateAppState(): Promise<{
         lastSync: Date.now(),
       });
       productCount = products.length;
+    }
+
+    // 4. BLD-20260404-009 — truck inventory snapshots (visibility only).
+    //    Never blocks login/routes: swallowed if it fails.
+    try {
+      await useTruckInventoryStore.getState().rehydrate();
+    } catch (e) {
+      console.warn('[rehydrate] truck inventory snapshots skipped:', e);
     }
 
     console.log(
