@@ -3,8 +3,8 @@
  * Request additional product from warehouse.
  */
 
-import React, { useState } from 'react';
-import { View, Text, ScrollView, TextInput, StyleSheet, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, ScrollView, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
@@ -24,11 +24,24 @@ interface RefillLine {
 export default function RefillScreen() {
   const router = useRouter();
   const products = useProductStore((s) => s.products);
+  const isLoadingProducts = useProductStore((s) => s.isLoading);
+  const productError = useProductStore((s) => s.error);
+  const loadProducts = useProductStore((s) => s.loadProducts);
   const enqueue = useSyncStore((s) => s.enqueue);
   const warehouseId = useAuthStore((s) => s.warehouseId);
 
   const [lines, setLines] = useState<RefillLine[]>([]);
   const [notes, setNotes] = useState('');
+
+  // BLD-20260404-008: Auto-load products if store is empty.
+  // Previously this screen depended on the user visiting the Inventory tab
+  // first (which is the only place that calls loadProducts). Opening
+  // "Solicitar Carga" from any other entry point showed an empty list.
+  useEffect(() => {
+    if (warehouseId && products.length === 0 && !isLoadingProducts) {
+      loadProducts(warehouseId);
+    }
+  }, [warehouseId]);
 
   function updateQty(productId: number, productName: string, delta: number) {
     setLines((prev) => {
@@ -75,6 +88,28 @@ export default function RefillScreen() {
         <Text style={styles.hint}>Solicita producto adicional a tu almacen/sucursal.</Text>
 
         <Text style={styles.sectionTitle}>PRODUCTOS A SOLICITAR</Text>
+        {isLoadingProducts && products.length === 0 && (
+          <View style={styles.emptyState}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={styles.emptyStateText}>Cargando productos...</Text>
+          </View>
+        )}
+        {!isLoadingProducts && products.length === 0 && (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>
+              {productError || 'No hay productos disponibles. Verifica tu conexion.'}
+            </Text>
+            {warehouseId && (
+              <Button
+                label="Reintentar"
+                variant="secondary"
+                small
+                onPress={() => loadProducts(warehouseId)}
+                style={{ marginTop: 8 }}
+              />
+            )}
+          </View>
+        )}
         {refillableProducts.map((p) => {
           const line = lines.find((l) => l.productId === p.id);
           return (
@@ -158,5 +193,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
     borderRadius: radii.button, paddingHorizontal: 14, paddingVertical: 12,
     color: colors.text, fontSize: 15, minHeight: 60, textAlignVertical: 'top',
+  },
+  emptyState: {
+    alignItems: 'center', justifyContent: 'center',
+    padding: 16, backgroundColor: colors.cardLighter,
+    borderRadius: radii.button, marginBottom: 8, gap: 6,
+  },
+  emptyStateText: {
+    fontSize: 12, color: colors.textDim, textAlign: 'center',
   },
 });
