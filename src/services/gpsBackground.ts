@@ -13,6 +13,9 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { useSyncStore } from '../stores/useSyncStore';
 import { useAuthStore } from '../stores/useAuthStore';
+// BLD-20260404-012: GPS admission buffer (rate-limit + dedup).
+// Pure helper, safe fallback — if it throws we still enqueue.
+import { shouldAdmitGpsPoint } from '../utils/gpsBuffer';
 
 const GPS_TASK_NAME = 'kold-field-gps-tracking';
 // V1.2: 15 min interval (was 10) — balances tracking vs battery/data
@@ -32,6 +35,27 @@ TaskManager.defineTask(GPS_TASK_NAME, async ({ data, error }) => {
       const employeeId = useAuthStore.getState().employeeId;
 
       if (employeeId) {
+        // BLD-20260404-012: admission buffer. Rejects rate-limited or
+        // duplicate points BEFORE they hit the sync queue. On any error
+        // the helper returns accept=true so legacy behaviour is kept.
+        let admit: { accept: boolean; reason: string } = { accept: true, reason: 'ok' };
+        try {
+          admit = shouldAdmitGpsPoint({
+            employeeId,
+            latitude: latest.coords.latitude,
+            longitude: latest.coords.longitude,
+            accuracy: latest.coords.accuracy ?? null,
+            timestamp: latest.timestamp,
+          });
+        } catch {
+          admit = { accept: true, reason: 'ok' };
+        }
+
+        if (!admit.accept) {
+          if (__DEV__) console.log(`[gps-bg] drop ${admit.reason}`);
+          return;
+        }
+
         useSyncStore.getState().enqueue('gps', {
           employee_id: employeeId,
           latitude: latest.coords.latitude,
