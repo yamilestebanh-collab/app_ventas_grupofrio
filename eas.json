@@ -1,0 +1,30 @@
+{
+  "cli": {
+    "version": ">= 5.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "GF_SVC_API_KEY": ""
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "GF_SVC_API_KEY": ""
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

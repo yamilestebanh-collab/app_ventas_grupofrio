@@ -5,6 +5,7 @@
  */
 
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
+import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 
 const STORE_KEYS = {
@@ -17,8 +18,46 @@ export const DEFAULT_BASE_URL = 'https://grupofrio.odoo.com';
 
 let _baseUrl = DEFAULT_BASE_URL;
 
+// BLD-20260405-022 (Fase 1): shared service-user api_key injected at build
+// time via app.config.js → Constants.expoConfig.extra.gfSvcApiKey. When
+// present, this value takes precedence over whatever /api/employee-sign-in
+// returned per employee, so every vendor uses the SAME Odoo account
+// (kold_field_svc, uid=21) and we consume exactly 1 internal license total
+// instead of 1 per vendor. Falls back to SecureStore in dev/local flows
+// where the env var is not set, preserving the legacy behaviour.
+//
+// Read once at module load; the value cannot change during an app session
+// without a full reload (which matches how Expo constants work).
+const _buildTimeSvcApiKey: string | null =
+  ((Constants.expoConfig?.extra as Record<string, unknown> | undefined)?.gfSvcApiKey as
+    | string
+    | null
+    | undefined) || null;
+
+if (_buildTimeSvcApiKey && __DEV__) {
+  // Never log the value itself; just confirm the source is populated.
+  console.log(
+    `[api] BLD-022 build-time GF_SVC_API_KEY active (len=${_buildTimeSvcApiKey.length}, ` +
+    `head=${_buildTimeSvcApiKey.slice(0, 4)}***)`,
+  );
+}
+
 function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n]+/g, '').trim();
+}
+
+/**
+ * BLD-022 Fase 1 — resolve the Api-Key header for outgoing Odoo RPC calls.
+ * Precedence:
+ *   1. Build-time env (Constants.expoConfig.extra.gfSvcApiKey) — production.
+ *   2. SecureStore (legacy per-employee api_key from /api/employee-sign-in)
+ *      — dev / fallback while the fast-track APK is rolling out.
+ * Returns `null` when neither source has a value.
+ */
+async function resolveApiKey(): Promise<string | null> {
+  if (_buildTimeSvcApiKey) return _buildTimeSvcApiKey;
+  const stored = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
+  return stored || null;
 }
 
 function safeParseJson(text: string): any {
@@ -41,7 +80,8 @@ async function buildHeaders(): Promise<Record<string, string>> {
     'Content-Type': 'application/json',
   };
 
-  const apiKey = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
+  // BLD-022 Fase 1 — build-time service key wins over SecureStore.
+  const apiKey = await resolveApiKey();
   const gfToken = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
 
   if (apiKey) {
@@ -103,7 +143,11 @@ export function createApiClient(): AxiosInstance {
       config.url = `${baseUrl}/${config.url.replace(/^\//, '')}`;
     }
 
-    const apiKey = await SecureStore.getItemAsync(STORE_KEYS.API_KEY);
+    // BLD-022 Fase 1 — same precedence as buildHeaders(): build-time
+    // service key wins over SecureStore so axios-based calls (login,
+    // legacy endpoints) also hit Odoo as kold_field_svc when the APK
+    // was built with GF_SVC_API_KEY populated.
+    const apiKey = await resolveApiKey();
     const gfToken = await SecureStore.getItemAsync(STORE_KEYS.GF_TOKEN);
 
     if (apiKey) {
