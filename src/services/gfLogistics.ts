@@ -42,10 +42,26 @@ export async function getMyPlan(): Promise<GFPlan | null> {
 
 export async function getPlanStops(planId: number): Promise<GFStop[]> {
   try {
-    const result = await postRest<GFStop[]>(`${GF_BASE}/plan/stops`, {
+    // BLD-20260405-021: backend wraps the response in
+    //   { ok, message, data: { found, plan, stops: [...] } }
+    // just like /my_plan (see BLD-20260404-007). The previous impl
+    // expected a bare array and silently returned [] against every
+    // wrapped payload, leaving the driver without visible stops
+    // (symptom: route appears in the app but "0 paradas" counter).
+    // We support both shapes so older backends still work.
+    const result = await postRest<any>(`${GF_BASE}/plan/stops`, {
       plan_id: planId,
     });
-    return Array.isArray(result) ? result : [];
+    if (Array.isArray(result)) return result as GFStop[];
+    if (!result || typeof result !== 'object') return [];
+    if (result.ok === false) {
+      console.warn('[gfLogistics] plan/stops returned ok=false:', result.message);
+      return [];
+    }
+    const data = result.data !== undefined ? result.data : result;
+    if (data && Array.isArray(data.stops)) return data.stops as GFStop[];
+    if (Array.isArray(data)) return data as GFStop[];
+    return [];
   } catch (error) {
     console.warn('[gfLogistics] plan/stops failed:', error);
     return [];
