@@ -16,7 +16,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
-import { useKoldStore } from '../../src/stores/useKoldStore';
+import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -31,9 +31,13 @@ export default function HomeScreen() {
     loadPlan();
   }, []);
 
-  // FIX: Acceder directamente al estado en lugar de llamar a una función que genera un nuevo array
-  const alerts = useKoldStore((s) => s.alerts);
-  const koldAlerts = useMemo(() => alerts || [], [alerts]);
+  // BLD-20260405-022 fase1 cleanup: `s.alerts` nunca existio en KoldState.
+  // El store expone `getAlerts()` que deriva alertas desde los scores
+  // cargados. `scores` es un Map que se reemplaza en cada loadForPartners,
+  // por lo que sirve como dependency del useMemo.
+  const getAlerts = useKoldStore((s) => s.getAlerts);
+  const scores = useKoldStore((s) => s.scores);
+  const koldAlerts = useMemo<KoldAlert[]>(() => getAlerts(), [getAlerts, scores]);
 
   // Next stops (pending + in_progress, max 4)
   const nextStops = useMemo(() => 

@@ -11,24 +11,38 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
-import { useKoldStore } from '../../src/stores/useKoldStore';
+import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 
 export default function AlertsScreen() {
   const router = useRouter();
-  
-  // FIX: Acceder directamente a las alertas y usar useMemo
-  const alerts = useKoldStore((s) => s.alerts);
-  const koldAlerts = useMemo(() => alerts || [], [alerts]);
-  
+
+  // BLD-20260405-022 fase1 cleanup: antes leiamos `s.alerts` que nunca
+  // existio en KoldState. El store expone `getAlerts()` que deriva las
+  // alertas de los scores cargados. Como `scores` se reemplaza por un
+  // Map nuevo en cada `loadForPartners`, lo usamos como dependency del
+  // useMemo para recomputar cuando hay data nueva.
+  const getAlerts = useKoldStore((s) => s.getAlerts);
+  const scores = useKoldStore((s) => s.scores);
+  const koldAlerts = useMemo<KoldAlert[]>(() => getAlerts(), [getAlerts, scores]);
+
   const scoreAvailable = useKoldStore((s) => s.scoreModuleAvailable);
   const { pendingCount, errorCount } = useSyncStore();
   const { stopsTotal, stopsCompleted } = useRouteStore();
 
-  const criticalAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'critical'), [koldAlerts]);
-  const warningAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'warning'), [koldAlerts]);
-  const opportunityAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'opportunity'), [koldAlerts]);
+  const criticalAlerts = useMemo(
+    () => koldAlerts.filter((a: KoldAlert) => a.type === 'critical'),
+    [koldAlerts],
+  );
+  const warningAlerts = useMemo(
+    () => koldAlerts.filter((a: KoldAlert) => a.type === 'warning'),
+    [koldAlerts],
+  );
+  const opportunityAlerts = useMemo(
+    () => koldAlerts.filter((a: KoldAlert) => a.type === 'opportunity'),
+    [koldAlerts],
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
