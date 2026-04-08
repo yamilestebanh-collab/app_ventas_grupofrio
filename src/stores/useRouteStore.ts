@@ -8,6 +8,7 @@ import { GFPlan, GFStop } from '../types/plan';
 import { getMyPlan, getPlanStops } from '../services/gfLogistics';
 // CROSS-STORE DEP: loads KOLD intelligence on route load. Documented in V1.3.1.
 import { useKoldStore } from './useKoldStore';
+import { useSyncStore } from './useSyncStore';
 import { storeSave, STORAGE_KEYS } from '../persistence/storage';
 
 interface RouteState {
@@ -40,6 +41,13 @@ export const useRouteStore = create<RouteState>((set, get) => ({
 
   loadPlan: async () => {
     if (get().isLoading) return; // Prevent concurrent calls
+
+    if (!useSyncStore.getState().isOnline) {
+      // Keep any rehydrated cached plan visible when offline.
+      set({ isLoading: false, error: get().plan ? null : 'Sin conexion' });
+      return;
+    }
+
     set({ isLoading: true, error: null });
     try {
       const plan = await getMyPlan();

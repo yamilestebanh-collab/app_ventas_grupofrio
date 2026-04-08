@@ -18,6 +18,7 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatElapsed } from '../../src/utils/time';
 import { checkIn } from '../../src/services/gfLogistics';
 import { initializeGPS, getCurrentPosition } from '../../src/services/gps';
@@ -44,6 +45,7 @@ export default function CheckinScreen() {
 
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
+  const allowOffDistanceVisits = useAuthStore((s) => s.allowOffDistanceVisits);
 
   const [gpsLoading, setGpsLoading] = useState(true);
   const [checkedIn, setCheckedIn] = useState(phase === 'checked_in' || phase === 'selling' || phase === 'no_selling');
@@ -90,7 +92,7 @@ export default function CheckinScreen() {
   // Check-in handler — only if geofence OK
   async function handleCheckIn() {
     if (!stop || checkingIn) return; // Guard: prevent double-tap
-    if (!isWithinFence && stop.customer_latitude && stop.customer_longitude) {
+    if (!allowOffDistanceVisits && !isWithinFence && stop.customer_latitude && stop.customer_longitude) {
       Alert.alert(
         'Fuera de rango',
         `Estás a ${Math.round(distanceMeters || 0)}m del cliente. Debes estar a menos de ${GEOFENCE_RADIUS_M}m para hacer check-in.`,
@@ -148,8 +150,9 @@ export default function CheckinScreen() {
 
   // Determine if customer has coordinates
   const hasCustomerCoords = !!(stop.customer_latitude && stop.customer_longitude);
-  // Can check-in: GPS ready + within fence (or no coords = allow)
-  const canCheckIn = !gpsLoading && (isWithinFence || !hasCustomerCoords);
+  const canSkipGeofence = allowOffDistanceVisits && hasCustomerCoords;
+  // Can check-in: GPS ready + within fence, no coords, or explicit employee bypass.
+  const canCheckIn = !gpsLoading && (isWithinFence || !hasCustomerCoords || canSkipGeofence);
 
   // GPS status display
   const gpsStatusInfo = (() => {
@@ -157,6 +160,13 @@ export default function CheckinScreen() {
     if (locStatus === 'denied') return { icon: '🚫', text: 'GPS denegado. Habilita ubicación.', color: '#EF4444' };
     if (locStatus === 'error') return { icon: '⚠️', text: locError || 'Error GPS', color: '#F59E0B' };
     if (!hasCustomerCoords) return { icon: '📍', text: 'Cliente sin coordenadas (check-in libre)', color: '#F59E0B' };
+    if (canSkipGeofence && !isWithinFence) {
+      return {
+        icon: '🟠',
+        text: `A ${Math.round(distanceMeters || 0)}m del cliente · excepción por permiso`,
+        color: '#F59E0B',
+      };
+    }
     if (isWithinFence) return { icon: '✅', text: `A ${Math.round(distanceMeters || 0)}m del cliente`, color: colors.success };
     return { icon: '🔴', text: `A ${Math.round(distanceMeters || 0)}m — necesitas estar a <${GEOFENCE_RADIUS_M}m`, color: '#EF4444' };
   })();
@@ -210,12 +220,25 @@ export default function CheckinScreen() {
               <Text style={[styles.distanceLabel, { color: isWithinFence ? colors.success : '#EF4444' }]}>
                 {Math.round(distanceMeters)}m / {GEOFENCE_RADIUS_M}m
               </Text>
+              {canSkipGeofence && !isWithinFence && (
+                <Text style={[styles.distanceLabel, { color: '#F59E0B' }]}>
+                  Check-in permitido por permiso del empleado
+                </Text>
+              )}
             </View>
           )}
 
           {/* Check-in button */}
           <Button
-            label={gpsLoading ? 'Obteniendo GPS...' : canCheckIn ? '📍 Hacer Check-in' : `🔴 Fuera de rango (${Math.round(distanceMeters || 0)}m)`}
+            label={
+              gpsLoading
+                ? 'Obteniendo GPS...'
+                : canCheckIn
+                  ? canSkipGeofence && !isWithinFence
+                    ? '🟠 Hacer Check-in (permiso especial)'
+                    : '📍 Hacer Check-in'
+                  : `🔴 Fuera de rango (${Math.round(distanceMeters || 0)}m)`
+            }
             onPress={handleCheckIn}
             fullWidth
             disabled={!canCheckIn || checkingIn}

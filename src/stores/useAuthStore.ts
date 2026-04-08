@@ -7,8 +7,11 @@
  */
 
 import { create } from 'zustand';
+import NetInfo from '@react-native-community/netinfo';
 import { setAuthTokens, clearAuthTokens, setBaseUrl } from '../services/api';
 import { signOut } from '../services/gfLogistics';
+import { storeRemove, STORAGE_KEYS } from '../persistence/storage';
+import { useRouteStore } from './useRouteStore';
 
 interface AuthState {
   // Auth status
@@ -88,6 +91,14 @@ interface EmployeePayload {
   [key: string]: unknown;
 }
 
+async function clearRouteCache(): Promise<void> {
+  useRouteStore.getState().reset();
+  await Promise.all([
+    storeRemove(STORAGE_KEYS.PLAN),
+    storeRemove(STORAGE_KEYS.STOPS),
+  ]);
+}
+
 export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: false,
   isLoading: false,
@@ -122,13 +133,25 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await setBaseUrl(baseUrl);
 
+      const loginUrl = `${baseUrl}/api/employee-sign-in`;
+      const netState = await NetInfo.fetch();
+      const isOnline = !!(netState.isConnected && netState.isInternetReachable !== false);
+      console.log('[login] start', {
+        url: loginUrl,
+        db,
+        isOnline,
+        isConnected: netState.isConnected,
+        isInternetReachable: netState.isInternetReachable,
+        type: netState.type,
+      });
+
       // BLD-20260404-007 (Fix 4): Use fetch instead of axios.
       // Axios XHR adapter fails with generic Network Error on some Android
       // devices running React Native 0.76. The postRest/postRpc helpers already
       // use fetch for the same reason — login must too.
       let response: Response;
       try {
-        response = await fetch(`${baseUrl}/api/employee-sign-in`, {
+        response = await fetch(loginUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -138,13 +161,30 @@ export const useAuthStore = create<AuthState>((set) => ({
         });
       } catch (netErr) {
         const msg = netErr instanceof Error ? netErr.message : 'Error de red';
-        console.warn('[login] Network error:', msg);
-        set({ error: 'Sin conexion al servidor. Verifica tu red.', isLoading: false });
+        console.warn('[login] Network error:', {
+          url: loginUrl,
+          message: msg,
+          isOnline,
+          type: netState.type,
+          isConnected: netState.isConnected,
+          isInternetReachable: netState.isInternetReachable,
+        });
+        set({
+          error: isOnline
+            ? `No se pudo conectar a ${loginUrl}. Posible DNS/VPN/TLS.`
+            : 'Sin conexion en el dispositivo. Verifica tu red.',
+          isLoading: false,
+        });
         return false;
       }
 
       if (!response.ok) {
-        console.warn('[login] HTTP error:', response.status);
+        console.warn('[login] HTTP error:', {
+          url: loginUrl,
+          status: response.status,
+          statusText: response.statusText,
+          isOnline,
+        });
         set({ error: `Error del servidor (${response.status})`, isLoading: false });
         return false;
       }
@@ -153,6 +193,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       try {
         payload = await response.json();
       } catch {
+        console.warn('[login] Invalid JSON response from', loginUrl);
         set({ error: 'Respuesta del servidor invalida', isLoading: false });
         return false;
       }
@@ -165,6 +206,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       }
 
       await setAuthTokens(result.api_key, result.gf_employee_token || '');
+      await clearRouteCache();
 
       const emp: EmployeePayload = result.employee || {};
 
@@ -216,6 +258,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await signOut();
     } finally {
+      await clearRouteCache();
       await clearAuthTokens();
       set({
         isAuthenticated: false,

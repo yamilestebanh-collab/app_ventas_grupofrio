@@ -11,10 +11,11 @@
  * 4. KOLD intelligence (if cached)
  */
 
-import { storeLoad, STORAGE_KEYS } from '../persistence/storage';
+import { storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { useSyncStore } from '../stores/useSyncStore';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useProductStore } from '../stores/useProductStore';
+import { useAuthStore } from '../stores/useAuthStore';
 import { GFPlan, GFStop } from '../types/plan';
 import { TruckProduct } from '../stores/useProductStore';
 
@@ -37,9 +38,12 @@ export async function rehydrateAppState(): Promise<{
     const stops = await storeLoad<GFStop[]>(STORAGE_KEYS.STOPS);
 
     if (plan && stops) {
-      // Check if plan is for today
       const today = new Date().toISOString().split('T')[0];
-      if (plan.date === today) {
+      const currentEmployeeId = useAuthStore.getState().employeeId;
+      const isTodayPlan = plan.date === today;
+      const isCurrentEmployeePlan = plan.driver_employee_id === currentEmployeeId;
+
+      if (isTodayPlan && isCurrentEmployeePlan) {
         const completed = stops.filter((s) =>
           ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(s.state)
         ).length;
@@ -54,8 +58,12 @@ export async function rehydrateAppState(): Promise<{
           lastSync: Date.now(),
         });
         hasPlan = true;
+      } else {
+        await Promise.all([
+          storeRemove(STORAGE_KEYS.PLAN),
+          storeRemove(STORAGE_KEYS.STOPS),
+        ]);
       }
-      // If plan is from a different day, don't rehydrate (force fresh load)
     }
 
     // 3. Products

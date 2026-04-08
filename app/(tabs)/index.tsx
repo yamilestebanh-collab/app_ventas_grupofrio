@@ -17,19 +17,25 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useKoldStore } from '../../src/stores/useKoldStore';
+import { useSyncStore } from '../../src/stores/useSyncStore';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const employeeId = useAuthStore((s) => s.employeeId);
   const employeeName = useAuthStore((s) => s.employeeName);
   const {
     plan, stops, stopsCompleted, stopsTotal, progressPct,
     isLoading, loadPlan,
   } = useRouteStore();
+  const isOnline = useSyncStore((s) => s.isOnline);
 
-  // Load plan on mount
+  // Reload on auth identity changes so a previous employee's in-memory state is not reused.
   useEffect(() => {
-    loadPlan();
-  }, []);
+    if (isAuthenticated && isOnline) {
+      void loadPlan();
+    }
+  }, [employeeId, isAuthenticated, isOnline, loadPlan]);
 
   // FIX: Acceder directamente al estado en lugar de llamar a una función que genera un nuevo array
   const alerts = useKoldStore((s) => s.alerts);

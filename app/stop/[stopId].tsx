@@ -25,6 +25,7 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useKoldStore } from '../../src/stores/useKoldStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
+import { useAuthStore } from '../../src/stores/useAuthStore';
 
 export default function StopDetailScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -63,6 +64,9 @@ export default function StopDetailScreen() {
   const distance = locStatus === 'ready' ? (realDistance ?? 999) : (stop._distanceMeters ?? 999);
   const scoreModuleAvailable = useKoldStore((s) => s.scoreModuleAvailable);
   const demandModuleAvailable = useKoldStore((s) => s.demandModuleAvailable);
+  const allowOffDistanceVisits = useAuthStore((s) => s.allowOffDistanceVisits);
+  const canOperateOffDistance = allowOffDistanceVisits && !!(stop.customer_latitude && stop.customer_longitude);
+  const canStartVisit = isGeoOk || canOperateOffDistance;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -110,20 +114,25 @@ export default function StopDetailScreen() {
         {/* Action buttons — real navigation */}
         <View style={styles.actions}>
           <TouchableOpacity
-            style={[styles.checkinBtn, !isGeoOk && { opacity: 0.4 }]}
-            onPress={() => isGeoOk && router.push(`/checkin/${stop.id}` as never)}
-            disabled={!isGeoOk}
+            style={[styles.checkinBtn, !canStartVisit && { opacity: 0.4 }]}
+            onPress={() => canStartVisit && router.push(`/checkin/${stop.id}` as never)}
+            disabled={!canStartVisit}
             activeOpacity={0.8}
           >
             <Text style={styles.checkinText}>📍 Check-in · Iniciar Visita</Text>
           </TouchableOpacity>
+          {canOperateOffDistance && !isGeoOk && (
+            <Text style={styles.overrideHint}>
+              Permiso activo: puedes operar fuera de rango para esta visita.
+            </Text>
+          )}
           <View style={styles.actionRow}>
             <Button
               label="🧾 Venta"
               variant="secondary"
               onPress={() => router.push(`/sale/${stop.id}` as never)}
               style={{ flex: 1 }}
-              disabled={!isGeoOk}
+              disabled={!canStartVisit}
             />
             <Button
               label="✕ No venta"
@@ -194,5 +203,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#fff',
+  },
+  overrideHint: {
+    fontSize: 11,
+    color: '#F59E0B',
+    textAlign: 'center',
+    marginTop: -2,
   },
 });
