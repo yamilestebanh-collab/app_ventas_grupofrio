@@ -7,12 +7,12 @@
  */
 
 export const colors = {
-  // Brand
-  primary: '#FF6B35',       // --k-o  Naranja KOLD
-  primaryDark: '#E85D26',   // --k-od Pressed state
-  primaryAlpha12: 'rgba(255,107,53,0.12)',
-  primaryAlpha08: 'rgba(255,107,53,0.08)',
-  primaryAlpha04: 'rgba(255,107,53,0.04)',
+  // Brand — V2: Blue/Gray
+  primary: '#2563EB',       // --k-b  Blue KOLD V2
+  primaryDark: '#1D4ED8',   // --k-bd Pressed state
+  primaryAlpha12: 'rgba(37,99,235,0.12)',
+  primaryAlpha08: 'rgba(37,99,235,0.08)',
+  primaryAlpha04: 'rgba(37,99,235,0.04)',
 
   // Backgrounds
   bg: '#0F1419',            // --k-bg  Main background

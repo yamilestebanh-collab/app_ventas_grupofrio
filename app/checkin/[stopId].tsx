@@ -21,7 +21,7 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatElapsed } from '../../src/utils/time';
 import { checkIn } from '../../src/services/gfLogistics';
-import { initializeGPS, getCurrentPosition } from '../../src/services/gps';
+import { initializeGPS, getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 
 const GEOFENCE_RADIUS_M = 50;
 
@@ -110,6 +110,11 @@ export default function CheckinScreen() {
       startVisit(stop, lat, lon);
       updateStopState(stop.id, 'in_progress');
       setCheckedIn(true);
+
+      // V2: Switch GPS to visit mode (stops periodic tracking, saves battery)
+      setGpsMode('in_visit');
+      // Capture a single GPS point tagged as check-in (fire-and-forget)
+      captureAndEnqueueGpsPoint('checkin').catch(() => {});
 
       if (isOnline) {
         await checkIn(stop.id, lat, lon);

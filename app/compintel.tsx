@@ -137,7 +137,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   brandBadge: {
-    backgroundColor: 'rgba(255,107,53,0.12)',
+    backgroundColor: 'rgba(37,99,235,0.12)',
     paddingHorizontal: spacing.sm,
     paddingVertical: 4,
     borderRadius: radii.circle,

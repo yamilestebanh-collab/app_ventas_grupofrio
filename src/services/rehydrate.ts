@@ -18,6 +18,8 @@ import { useProductStore } from '../stores/useProductStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { GFPlan, GFStop } from '../types/plan';
 import { TruckProduct } from '../stores/useProductStore';
+// V2: Error persistence & periodic flush
+import { loadPersistedErrors, startErrorPersistence } from '../utils/logger';
 
 export async function rehydrateAppState(): Promise<{
   queueSize: number;
@@ -29,6 +31,10 @@ export async function rehydrateAppState(): Promise<{
   let productCount = 0;
 
   try {
+    // 0. V2: Restore persisted error logs + start periodic flush
+    await loadPersistedErrors();
+    startErrorPersistence();
+
     // 1. Sync queue — CRITICAL: don't lose pending operations
     await useSyncStore.getState().rehydrateQueue();
     queueSize = useSyncStore.getState().pendingCount;

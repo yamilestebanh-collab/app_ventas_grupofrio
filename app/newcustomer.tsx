@@ -107,7 +107,7 @@ const styles = StyleSheet.create({
   permissionBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,107,53,0.08)',
+    backgroundColor: 'rgba(37,99,235,0.08)',
     borderRadius: radii.button,
     padding: spacing.md,
     marginBottom: spacing.lg,

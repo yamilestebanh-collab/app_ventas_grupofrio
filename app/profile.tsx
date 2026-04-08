@@ -2,8 +2,8 @@
  * Profile screen — employee info, settings, logout.
  */
 
-import React from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert } from 'react-native';
+import React, { useCallback, useRef, useState } from 'react';
+import { View, Text, ScrollView, StyleSheet, Alert, Share, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
@@ -14,6 +14,7 @@ import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
+import { getDiagnosticsExport, getLocalHealthSnapshot } from '../src/utils/healthCheck';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -22,6 +23,37 @@ export default function ProfileScreen() {
     isSupervisor, allowCreateCustomer, logout,
   } = useAuthStore();
   const pendingCount = useSyncStore((s) => s.pendingCount);
+
+  // V2: Hidden diagnostics — tap version 5 times
+  const tapCountRef = useRef(0);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+
+  const handleVersionTap = useCallback(() => {
+    tapCountRef.current += 1;
+
+    // Reset after 3 seconds of inactivity
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = setTimeout(() => { tapCountRef.current = 0; }, 3000);
+
+    if (tapCountRef.current >= 5) {
+      tapCountRef.current = 0;
+      setShowDiagnostics(true);
+    }
+  }, []);
+
+  const handleExportDiagnostics = useCallback(async () => {
+    try {
+      const diagnostics = getDiagnosticsExport();
+      const text = JSON.stringify(diagnostics, null, 2);
+      await Share.share({
+        message: text,
+        title: 'KOLD Field Diagnostics',
+      });
+    } catch {
+      Alert.alert('Error', 'No se pudo exportar diagnosticos');
+    }
+  }, []);
 
   async function handleLogout() {
     if (pendingCount > 0) {
@@ -103,10 +135,12 @@ export default function ProfileScreen() {
         {/* App info */}
         <Text style={styles.sectionTitle}>APP</Text>
         <Card>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Version</Text>
-            <Text style={styles.infoValue}>1.0.0</Text>
-          </View>
+          <TouchableOpacity onPress={handleVersionTap} activeOpacity={1}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Version</Text>
+              <Text style={styles.infoValue}>2.0.0-pilot</Text>
+            </View>
+          </TouchableOpacity>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Almacen</Text>
             <Text style={styles.infoValue}>#{warehouseId || '--'}</Text>
@@ -119,6 +153,30 @@ export default function ProfileScreen() {
           </View>
         </Card>
 
+        {/* V2: Hidden diagnostics panel — visible after 5 taps on version */}
+        {showDiagnostics && (
+          <>
+            <Text style={styles.sectionTitle}>DIAGNOSTICOS</Text>
+            <Card>
+              <DiagnosticsSummary />
+              <Button
+                label="Exportar Diagnosticos"
+                variant="secondary"
+                fullWidth
+                onPress={handleExportDiagnostics}
+                style={{ marginTop: 8 }}
+              />
+              <Button
+                label="Cerrar"
+                variant="secondary"
+                fullWidth
+                onPress={() => setShowDiagnostics(false)}
+                style={{ marginTop: 4 }}
+              />
+            </Card>
+          </>
+        )}
+
         {/* Logout */}
         <Button
           label="Cerrar Sesion"
@@ -129,6 +187,49 @@ export default function ProfileScreen() {
         />
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+/** Lightweight diagnostics summary — no heavy renders. */
+function DiagnosticsSummary() {
+  const snapshot = getLocalHealthSnapshot();
+  const statusColor = snapshot.status === 'healthy'
+    ? colors.success
+    : snapshot.status === 'degraded'
+      ? colors.warning
+      : colors.error;
+
+  return (
+    <View>
+      <View style={styles.infoRow}>
+        <Text style={styles.infoLabel}>Estado</Text>
+        <Text style={[styles.infoValue, { color: statusColor }]}>
+          {snapshot.status.toUpperCase()}
+        </Text>
+      </View>
+      <View style={styles.infoRow}>
+        <Text style={styles.infoLabel}>Pendientes</Text>
+        <Text style={styles.infoValue}>{snapshot.pendingCount}</Text>
+      </View>
+      <View style={styles.infoRow}>
+        <Text style={styles.infoLabel}>Fallidos</Text>
+        <Text style={[styles.infoValue, snapshot.deadCount > 0 ? { color: colors.error } : {}]}>
+          {snapshot.deadCount}
+        </Text>
+      </View>
+      <View style={styles.infoRow}>
+        <Text style={styles.infoLabel}>GPS cola</Text>
+        <Text style={styles.infoValue}>{snapshot.gpsQueueSize}</Text>
+      </View>
+      <View style={styles.infoRow}>
+        <Text style={styles.infoLabel}>GPS modo</Text>
+        <Text style={styles.infoValue}>{snapshot.gpsMode}</Text>
+      </View>
+      <View style={styles.infoRow}>
+        <Text style={styles.infoLabel}>Inventario</Text>
+        <Text style={styles.infoValue}>{snapshot.inventorySource}</Text>
+      </View>
+    </View>
   );
 }
 

@@ -14,6 +14,9 @@
 
 import { postRest } from './api';
 import { GFPlan, GFStop } from '../types/plan';
+// BLD-008: optional client event metadata. Feature-flagged inside the
+// helper — safe to pass from anywhere.
+import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientEvent';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -73,26 +76,28 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
 export async function checkIn(
   stopId: number,
   latitude: number,
-  longitude: number
+  longitude: number,
+  meta?: ClientEventMeta | null,
 ): Promise<boolean> {
-  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkin`, {
-    stop_id: stopId,
-    latitude,
-    longitude,
-  });
+  const payload = attachClientMetaToRestPayload(
+    { stop_id: stopId, latitude, longitude },
+    meta ?? null,
+  );
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkin`, payload);
   return !!result;
 }
 
 export async function checkOut(
   stopId: number,
   latitude: number,
-  longitude: number
+  longitude: number,
+  meta?: ClientEventMeta | null,
 ): Promise<boolean> {
-  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, {
-    stop_id: stopId,
-    latitude,
-    longitude,
-  });
+  const payload = attachClientMetaToRestPayload(
+    { stop_id: stopId, latitude, longitude },
+    meta ?? null,
+  );
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, payload);
   return !!result;
 }
 
@@ -110,26 +115,28 @@ export async function getStopLines(stopId: number): Promise<unknown[]> {
 export async function reportIncident(
   stopId: number,
   incidentTypeId: number,
-  notes: string
+  notes: string,
+  meta?: ClientEventMeta | null,
 ): Promise<boolean> {
-  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/incidents`, {
-    stop_id: stopId,
-    incident_type_id: incidentTypeId,
-    notes,
-  });
+  const payload = attachClientMetaToRestPayload(
+    { stop_id: stopId, incident_type_id: incidentTypeId, notes },
+    meta ?? null,
+  );
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/incidents`, payload);
   return !!result;
 }
 
 export async function uploadStopImage(
   stopId: number,
   imageBase64: string,
-  imageType: string = 'visit'
+  imageType: string = 'visit',
+  meta?: ClientEventMeta | null,
 ): Promise<boolean> {
-  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/images`, {
-    stop_id: stopId,
-    image_base64: imageBase64,
-    image_type: imageType,
-  });
+  const payload = attachClientMetaToRestPayload(
+    { stop_id: stopId, image_base64: imageBase64, image_type: imageType },
+    meta ?? null,
+  );
+  const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/images`, payload);
   return !!result;
 }
 
@@ -140,5 +147,49 @@ export async function signOut(): Promise<void> {
     await postRest(`${GF_BASE}/sign_out`);
   } catch {
     // Best effort
+  }
+}
+
+// ═══ BLD-20260404-013 — Truck stock by warehouse ═══
+//
+// Tries the new gf_logistics_ops endpoint `/truck_stock` which returns
+// products scoped by the chofer's assigned warehouse. If the endpoint
+// does not exist yet (HTTP 404, gateway error, or empty/invalid payload)
+// the caller is expected to fall back to the legacy `odooRead` path.
+//
+// Contract (expected from Sprint 3 P4, still not deployed in backend):
+//   POST /gf/logistics/api/employee/truck_stock
+//   Body: { warehouse_id?: number }
+//   Response: {
+//     ok: true,
+//     data: {
+//       warehouse_id: number,
+//       products: [
+//         { id, name, default_code, list_price, qty_available,
+//           sale_ok, product_tmpl_id, weight, categ_id }, ...
+//       ]
+//     }
+//   }
+//
+// Returns `null` when the endpoint is unavailable — caller must treat
+// `null` as "fall back to existing behaviour". NEVER throws.
+export async function fetchTruckStock(
+  warehouseId: number | null | undefined,
+): Promise<unknown[] | null> {
+  try {
+    const body: Record<string, unknown> = {};
+    if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
+    const result = await postRest<any>(`${GF_BASE}/truck_stock`, body);
+    if (!result || typeof result !== 'object') return null;
+    if (result.ok === false) return null;
+    const data = result.data !== undefined ? result.data : result;
+    const products = (data && Array.isArray(data.products)) ? data.products : null;
+    if (!products) return null;
+    return products;
+  } catch (error) {
+    // Endpoint not deployed yet, auth issue, offline, etc.
+    // We swallow so the caller transparently falls back.
+    if (__DEV__) console.warn('[gfLogistics] truck_stock unavailable, falling back:', error);
+    return null;
   }
 }

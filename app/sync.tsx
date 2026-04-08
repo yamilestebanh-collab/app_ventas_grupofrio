@@ -24,11 +24,12 @@ const typeLabels: Record<string, string> = {
   prospection: 'Operacion', gps: 'GPS',
 };
 
-const statusBadge: Record<string, { label: string; variant: 'yellow' | 'green' | 'red' | 'orange' }> = {
+const statusBadge: Record<string, { label: string; variant: 'yellow' | 'green' | 'red' | 'orange' | 'dim' }> = {
   pending: { label: 'Pendiente', variant: 'yellow' },
   syncing: { label: 'Sincronizando', variant: 'orange' },
   done: { label: '✓ Listo', variant: 'green' },
   error: { label: 'Error', variant: 'red' },
+  dead: { label: 'Fallido', variant: 'dim' },
 };
 
 export default function SyncScreen() {

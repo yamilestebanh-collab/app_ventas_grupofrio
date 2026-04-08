@@ -77,7 +77,7 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   permissionBanner: {
-    backgroundColor: 'rgba(255,107,53,0.08)',
+    backgroundColor: 'rgba(37,99,235,0.08)',
     borderRadius: radii.button,
     padding: spacing.sm,
     marginBottom: spacing.lg,

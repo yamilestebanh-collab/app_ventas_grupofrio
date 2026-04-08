@@ -122,7 +122,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   notice: {
-    backgroundColor: 'rgba(255,107,53,0.08)',
+    backgroundColor: 'rgba(37,99,235,0.08)',
     borderRadius: radii.button,
     padding: spacing.md,
     marginBottom: spacing.lg,

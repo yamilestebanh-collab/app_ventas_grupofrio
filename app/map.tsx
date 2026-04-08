@@ -16,7 +16,7 @@ import type { GFStop, StopState } from '../src/types/plan';
 
 const STATUS_COLORS: Record<StopState, string> = {
   pending: '#8B95A3',
-  in_progress: '#FF6B35',
+  in_progress: '#2563EB',
   done: '#22C55E',
   not_visited: '#EF4444',
   no_stock: '#F59E0B',
@@ -138,7 +138,7 @@ export default function MapScreen() {
           {routeCoords.length > 1 && (
             <Polyline
               coordinates={routeCoords}
-              strokeColor="rgba(255,107,53,0.6)"
+              strokeColor="rgba(37,99,235,0.6)"
               strokeWidth={3}
               lineDashPattern={[10, 5]}
             />
