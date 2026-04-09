@@ -1,25 +1,42 @@
 /**
- * V1.3 ProductPicker — Full product selector with:
+ * ProductPicker V2 — Dual view product selector.
+ *
+ * BLD-20260409: Complete rewrite for UX pilot feedback.
+ *
+ * Features:
+ * - Dual view: list (compact) and grid (2 columns with images)
+ * - Prices shown WITH IVA (precio final visible para el vendedor)
  * - Fuzzy search by name, code, or category
- * - Category tabs (Hielo, Cups, Snack, Proteina, Otros)
+ * - Category tabs (fixed height, no overlap)
  * - Inline quantity selector
- * - Stock visibility with out-of-stock shown but disabled
- * - KoldDemand recommendation badges
- * - Recent products section
+ * - Product images from Odoo image_128
+ * - View preference persisted
+ *
+ * PRICE LOGIC:
+ *   Odoo list_price = base price WITHOUT IVA
+ *   Visual price = list_price * 1.16 (IVA included)
+ *   Internal SaleLineItem.price = list_price (base, for Odoo)
+ *   This means the sale screen subtotal/tax/total breakdown is correct.
  */
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, Modal, Animated, Image,
+  StyleSheet, Modal, Image, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useProductStore, TruckProduct } from '../../stores/useProductStore';
 import { useVisitStore, SaleLineItem } from '../../stores/useVisitStore';
 import { useKoldStore } from '../../stores/useKoldStore';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
 import { typography, fonts } from '../../theme/typography';
+import { formatPriceWithIVA } from '../../utils/time';
+
+// ═══ Types ═══
+
+type ViewMode = 'list' | 'grid';
 
 interface ProductPickerProps {
   visible: boolean;
@@ -40,6 +57,14 @@ const CATEGORIES = [
 
 type CategoryKey = typeof CATEGORIES[number]['key'];
 
+const VIEW_PREF_KEY = 'kf:ui:productViewMode';
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const GRID_GAP = 8;
+const GRID_PADDING = spacing.screenPadding;
+const GRID_CARD_WIDTH = (SCREEN_WIDTH - GRID_PADDING * 2 - GRID_GAP) / 2;
+
+// ═══ Helpers ═══
+
 function categorizeProduct(name: string): CategoryKey {
   const n = name.toUpperCase();
   if (n.includes('BARRA') || n.includes('ROLITO') || n.includes('BOLSA DE HIELO') ||
@@ -57,10 +82,23 @@ function fuzzyMatch(text: string, query: string): boolean {
   const t = text.toLowerCase();
   const q = query.toLowerCase().trim();
   if (!q) return true;
-  // Match all words independently (AND)
   const words = q.split(/\s+/);
   return words.every((w) => t.includes(w));
 }
+
+/** Check if product has a valid image from Odoo */
+function hasValidImage(p: TruckProduct): boolean {
+  return !!(p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 10);
+}
+
+// Enriched product type used internally
+type EnrichedProduct = TruckProduct & {
+  category: CategoryKey;
+  isRecommended: boolean;
+  isAlreadyAdded: boolean;
+};
+
+// ═══ Component ═══
 
 export function ProductPicker({ visible, onClose, existingProductIds, partnerId }: ProductPickerProps) {
   const products = useProductStore((s) => s.products);
@@ -68,21 +106,35 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
   const addSaleLine = useVisitStore((s) => s.addSaleLine);
   const forecasts = useKoldStore((s) => s.forecasts);
   const isGlobalFallback = inventorySource === 'global_legacy';
+
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<CategoryKey>('all');
   const [quantities, setQuantities] = useState<Record<number, number>>({});
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
 
-  // Get demand recommendations for this partner
+  // Load saved view preference
+  useEffect(() => {
+    AsyncStorage.getItem(VIEW_PREF_KEY).then((v) => {
+      if (v === 'list' || v === 'grid') setViewMode(v);
+    }).catch(() => {});
+  }, []);
+
+  // Save view preference on change
+  const toggleView = useCallback(() => {
+    const next: ViewMode = viewMode === 'list' ? 'grid' : 'list';
+    setViewMode(next);
+    AsyncStorage.setItem(VIEW_PREF_KEY, next).catch(() => {});
+  }, [viewMode]);
+
+  // Demand recommendations
   const recommendations = useMemo(() => {
     if (!partnerId) return new Set<number>();
     const forecast = forecasts.get(partnerId);
     if (!forecast) return new Set<number>();
-    // V1.3: KoldForecastData doesn't have productLines yet.
-    // For now, no product-level recommendations — just show forecast exists.
     return new Set<number>();
   }, [partnerId, forecasts]);
 
-  // Enrich products with category and recommendation
+  // Enrich products
   const enrichedProducts = useMemo(() => {
     return products.map((p) => ({
       ...p,
@@ -92,25 +144,21 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     }));
   }, [products, recommendations, existingProductIds]);
 
-  // Filter
+  // Filter + sort
   const filtered = useMemo(() => {
     return enrichedProducts.filter((p) => {
-      // Category filter
       if (activeCategory !== 'all' && p.category !== activeCategory) return false;
-      // Search filter
       if (!fuzzyMatch(p.name + ' ' + (p.default_code || ''), search)) return false;
-      // Hide zero-stock unless global fallback (where stock is unreliable)
       if (!isGlobalFallback && p.qty_display <= 0) return false;
       return true;
     }).sort((a, b) => {
-      // Sort: recommended first, then in-stock, then alphabetical
       if (a.isRecommended && !b.isRecommended) return -1;
       if (!a.isRecommended && b.isRecommended) return 1;
       if (a.qty_display > 0 && b.qty_display <= 0) return -1;
       if (a.qty_display <= 0 && b.qty_display > 0) return 1;
       return a.name.localeCompare(b.name);
     });
-  }, [enrichedProducts, activeCategory, search]);
+  }, [enrichedProducts, activeCategory, search, isGlobalFallback]);
 
   // Category counts
   const categoryCounts = useMemo(() => {
@@ -129,14 +177,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     });
   }, []);
 
-  function handleSelect(product: TruckProduct & { category: CategoryKey }) {
+  function handleSelect(product: EnrichedProduct) {
     if (product.qty_display <= 0) return;
     if (existingProductIds.includes(product.id)) return;
 
     const qty = quantities[product.id] || 1;
-    // BLD-20260408-P0: Guard against undefined/null list_price from Odoo.
-    // Without this, NaN propagates to subtotal/tax/total and the entire
-    // sale screen shows $NaN.
+    // IMPORTANT: SaleLineItem.price = list_price (base, sin IVA)
+    // The IVA is added in saleTotal() = subtotal * 1.16
+    // Visual display uses formatPriceWithIVA() separately.
     const safePrice = (typeof product.list_price === 'number' && !isNaN(product.list_price))
       ? product.list_price : 0;
     const line: SaleLineItem = {
@@ -153,74 +201,146 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     onClose();
   }
 
-  function renderProduct({ item: p }: { item: TruckProduct & { category: CategoryKey; isRecommended: boolean; isAlreadyAdded: boolean } }) {
+  // ═══ Product Image Component ═══
+
+  function ProductImage({ product, size }: { product: TruckProduct; size: number }) {
+    if (hasValidImage(product)) {
+      return (
+        <Image
+          source={{ uri: `data:image/png;base64,${product.image_128}` }}
+          style={{ width: size, height: size, borderRadius: 8 }}
+          resizeMode="cover"
+        />
+      );
+    }
+    // Placeholder with category-aware emoji
+    const cat = categorizeProduct(product.name);
+    const emoji = cat === 'hielo' ? '🧊' : cat === 'cups' ? '🥤' :
+                  cat === 'snack' ? '🍦' : cat === 'proteina' ? '🥩' : '📦';
+    return (
+      <View style={[styles.imgPlaceholder, { width: size, height: size }]}>
+        <Text style={{ fontSize: size * 0.45 }}>{emoji}</Text>
+      </View>
+    );
+  }
+
+  // ═══ List View Row ═══
+
+  function renderListItem({ item: p }: { item: EnrichedProduct }) {
     const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
     const disabled = outOfStock || alreadyAdded;
     const qty = quantities[p.id] || 1;
 
-    // BLD-20260408-P1: Product thumbnail from Odoo image_128
-    const hasImage = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 10;
-
     return (
-      <View style={[styles.productRow, disabled && styles.productRowDisabled]}>
-        {/* Product thumbnail */}
-        {hasImage ? (
-          <Image
-            source={{ uri: `data:image/png;base64,${p.image_128}` }}
-            style={styles.productThumb}
-          />
-        ) : (
-          <View style={[styles.productThumb, styles.productThumbPlaceholder]}>
-            <Text style={{ fontSize: 16 }}>📦</Text>
-          </View>
-        )}
+      <View style={[styles.listRow, disabled && styles.rowDisabled]}>
+        <ProductImage product={p} size={44} />
 
         <TouchableOpacity
-          style={{ flex: 1 }}
+          style={styles.listInfo}
           onPress={() => !disabled && handleSelect(p)}
           activeOpacity={disabled ? 1 : 0.7}
           disabled={disabled}
         >
-          <View style={styles.productHeader}>
-            <Text style={[styles.productName, disabled && styles.textDisabled]} numberOfLines={1}>
+          <View style={styles.listHeader}>
+            <Text style={[styles.listName, disabled && styles.textDim]} numberOfLines={1}>
               {p.name}
             </Text>
-            {p.isRecommended && <Badge label="📊 Sugerido" variant="green" />}
-            {alreadyAdded && <Badge label="✓ Agregado" variant="dim" />}
+            {p.isRecommended && <Badge label="Sugerido" variant="green" />}
+            {alreadyAdded && <Badge label="Agregado" variant="dim" />}
           </View>
-          <View style={styles.productMeta}>
-            <Text style={[styles.productPrice, disabled && styles.textDisabled]}>
-              ${(p.list_price || 0).toFixed(2)}
+          <View style={styles.listMeta}>
+            <Text style={[styles.listPrice, disabled && styles.textDim]}>
+              {formatPriceWithIVA(p.list_price)}
             </Text>
-            <Text style={styles.productSep}>·</Text>
-            <Text style={[
-              styles.productStock,
-              outOfStock && styles.textOutOfStock,
-            ]}>
+            <Text style={styles.sep}>·</Text>
+            <Text style={[styles.listStock, outOfStock && styles.textRed]}>
               {outOfStock ? 'Agotado' : `${p.qty_display} disp.`}
             </Text>
             {(p.weight ?? 0) > 0 && (
               <>
-                <Text style={styles.productSep}>·</Text>
-                <Text style={styles.productWeight}>{p.weight}kg</Text>
+                <Text style={styles.sep}>·</Text>
+                <Text style={styles.listWeight}>{p.weight}kg</Text>
               </>
             )}
           </View>
         </TouchableOpacity>
 
-        {/* Quantity selector — only if in stock and not added */}
         {!disabled && (
-          <View style={styles.qtySelector}>
-            <TouchableOpacity
-              style={styles.qtyBtn}
-              onPress={() => setQty(p.id, -1, p.qty_display)}
-            >
+          <View style={styles.qtyRow}>
+            <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(p.id, -1, p.qty_display)}>
               <Text style={styles.qtyBtnText}>−</Text>
             </TouchableOpacity>
-            <Text style={styles.qtyValue}>{qty}</Text>
+            <Text style={styles.qtyVal}>{qty}</Text>
             <TouchableOpacity
-              style={[styles.qtyBtn, qty >= p.qty_display && styles.qtyBtnDisabled]}
+              style={[styles.qtyBtn, qty >= p.qty_display && styles.qtyBtnOff]}
+              onPress={() => setQty(p.id, 1, p.qty_display)}
+              disabled={qty >= p.qty_display}
+            >
+              <Text style={styles.qtyBtnText}>+</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  // ═══ Grid View Card ═══
+
+  function renderGridItem({ item: p }: { item: EnrichedProduct }) {
+    const outOfStock = p.qty_display <= 0;
+    const alreadyAdded = p.isAlreadyAdded;
+    const disabled = outOfStock || alreadyAdded;
+    const qty = quantities[p.id] || 1;
+
+    return (
+      <View style={[styles.gridCard, disabled && styles.rowDisabled]}>
+        <TouchableOpacity
+          onPress={() => !disabled && handleSelect(p)}
+          activeOpacity={disabled ? 1 : 0.7}
+          disabled={disabled}
+          style={styles.gridTouchArea}
+        >
+          {/* Image */}
+          <View style={styles.gridImgWrap}>
+            <ProductImage product={p} size={GRID_CARD_WIDTH - 20} />
+            {p.isRecommended && (
+              <View style={styles.gridBadge}>
+                <Text style={styles.gridBadgeText}>Sugerido</Text>
+              </View>
+            )}
+            {alreadyAdded && (
+              <View style={[styles.gridBadge, styles.gridBadgeDim]}>
+                <Text style={styles.gridBadgeText}>Agregado</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Name */}
+          <Text style={[styles.gridName, disabled && styles.textDim]} numberOfLines={2}>
+            {p.name}
+          </Text>
+
+          {/* Price with IVA */}
+          <Text style={[styles.gridPrice, disabled && styles.textDim]}>
+            {formatPriceWithIVA(p.list_price)}
+          </Text>
+
+          {/* Stock */}
+          <Text style={[styles.gridStock, outOfStock && styles.textRed]}>
+            {outOfStock ? 'Agotado' : `${p.qty_display} disponibles`}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Qty controls */}
+        {!disabled && (
+          <View style={styles.gridQtyRow}>
+            <TouchableOpacity style={styles.qtyBtnSm} onPress={() => setQty(p.id, -1, p.qty_display)}>
+              <Text style={styles.qtyBtnText}>−</Text>
+            </TouchableOpacity>
+            <Text style={styles.qtyVal}>{qty}</Text>
+            <TouchableOpacity
+              style={[styles.qtyBtnSm, qty >= p.qty_display && styles.qtyBtnOff]}
               onPress={() => setQty(p.id, 1, p.qty_display)}
               disabled={qty >= p.qty_display}
             >
@@ -238,12 +358,23 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <SafeAreaView style={styles.modal}>
-        {/* Header */}
+        {/* Header with view toggle */}
         <View style={styles.header}>
           <Text style={typography.screenTitle}>Agregar Producto</Text>
-          <TouchableOpacity onPress={() => { setSearch(''); setQuantities({}); onClose(); }}>
-            <Text style={styles.closeBtn}>Cerrar</Text>
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            {/* View toggle */}
+            <TouchableOpacity style={styles.viewToggle} onPress={toggleView}>
+              <Text style={styles.viewToggleText}>
+                {viewMode === 'list' ? '▦' : '☰'}
+              </Text>
+              <Text style={styles.viewToggleLabel}>
+                {viewMode === 'list' ? 'Grid' : 'Lista'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setSearch(''); setQuantities({}); onClose(); }}>
+              <Text style={styles.closeBtn}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Global fallback warning */}
@@ -256,10 +387,10 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
         )}
 
         {/* Search */}
-        <View style={styles.searchContainer}>
+        <View style={styles.searchWrap}>
           <TextInput
             style={styles.searchInput}
-            placeholder="🔍 Buscar por nombre o codigo..."
+            placeholder="Buscar por nombre o codigo..."
             placeholderTextColor={colors.textDim}
             value={search}
             onChangeText={setSearch}
@@ -268,41 +399,30 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
             returnKeyType="search"
           />
           {search.length > 0 && (
-            <TouchableOpacity
-              style={styles.clearBtn}
-              onPress={() => setSearch('')}
-            >
+            <TouchableOpacity style={styles.clearBtn} onPress={() => setSearch('')}>
               <Text style={styles.clearBtnText}>✕</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        {/* BLD-20260408-P1: Category tabs — fixed height to prevent overlap with product list */}
+        {/* Category tabs — fixed height, no overlap */}
         <FlatList
           horizontal
           data={CATEGORIES}
           keyExtractor={(c) => c.key}
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryBar}
-          style={styles.categoryList}
+          style={styles.catList}
+          contentContainerStyle={styles.catBar}
           renderItem={({ item: cat }) => (
             <TouchableOpacity
-              style={[
-                styles.categoryTab,
-                activeCategory === cat.key && styles.categoryTabActive,
-              ]}
+              style={[styles.catTab, activeCategory === cat.key && styles.catTabActive]}
               onPress={() => setActiveCategory(cat.key)}
             >
-              <Text style={styles.categoryIcon}>{cat.icon}</Text>
-              <Text style={[
-                styles.categoryLabel,
-                activeCategory === cat.key && styles.categoryLabelActive,
-              ]}>
+              <Text style={styles.catIcon}>{cat.icon}</Text>
+              <Text style={[styles.catLabel, activeCategory === cat.key && styles.catLabelActive]}>
                 {cat.label}
               </Text>
-              <Text style={styles.categoryCount}>
-                {categoryCounts[cat.key] || 0}
-              </Text>
+              <Text style={styles.catCount}>{categoryCounts[cat.key] || 0}</Text>
             </TouchableOpacity>
           )}
         />
@@ -313,125 +433,193 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
             {inStockCount} disponible{inStockCount !== 1 ? 's' : ''}
             {recommendedCount > 0 ? ` · ${recommendedCount} sugerido${recommendedCount !== 1 ? 's' : ''}` : ''}
           </Text>
+          <Text style={styles.infoText}>Precios con IVA</Text>
         </View>
 
-        {/* Results */}
-        <FlatList
-          data={filtered}
-          renderItem={renderProduct}
-          keyExtractor={(p) => String(p.id)}
-          contentContainerStyle={styles.list}
-          initialNumToRender={15}
-          maxToRenderPerBatch={10}
-          windowSize={5}
-          ListEmptyComponent={
-            <View style={styles.emptyCard}>
-              <Text style={{ fontSize: 32, marginBottom: 8 }}>📦</Text>
-              <Text style={typography.dim}>
-                {search
-                  ? `Sin resultados para "${search}"`
-                  : activeCategory !== 'all'
-                    ? 'Sin productos en esta categoria'
-                    : 'No hay productos disponibles'}
-              </Text>
-            </View>
-          }
-        />
+        {/* Product list/grid */}
+        {viewMode === 'list' ? (
+          <FlatList
+            data={filtered}
+            renderItem={renderListItem}
+            keyExtractor={(p) => String(p.id)}
+            contentContainerStyle={styles.listContainer}
+            initialNumToRender={15}
+            maxToRenderPerBatch={10}
+            windowSize={5}
+            ListEmptyComponent={<EmptyState search={search} activeCategory={activeCategory} />}
+          />
+        ) : (
+          <FlatList
+            data={filtered}
+            renderItem={renderGridItem}
+            keyExtractor={(p) => String(p.id)}
+            numColumns={2}
+            columnWrapperStyle={styles.gridRow}
+            contentContainerStyle={styles.gridContainer}
+            initialNumToRender={10}
+            maxToRenderPerBatch={8}
+            windowSize={5}
+            ListEmptyComponent={<EmptyState search={search} activeCategory={activeCategory} />}
+          />
+        )}
       </SafeAreaView>
     </Modal>
   );
 }
 
+// ═══ Empty State ═══
+
+function EmptyState({ search, activeCategory }: { search: string; activeCategory: string }) {
+  return (
+    <View style={styles.emptyCard}>
+      <Text style={{ fontSize: 32, marginBottom: 8 }}>📦</Text>
+      <Text style={typography.dim}>
+        {search
+          ? `Sin resultados para "${search}"`
+          : activeCategory !== 'all'
+            ? 'Sin productos en esta categoria'
+            : 'No hay productos disponibles'}
+      </Text>
+    </View>
+  );
+}
+
+// ═══ Styles ═══
+
 const styles = StyleSheet.create({
   modal: { flex: 1, backgroundColor: colors.bg },
+
+  // Header
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: spacing.screenPadding, paddingVertical: 14,
+    paddingHorizontal: spacing.screenPadding, paddingVertical: 12,
   },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   closeBtn: { fontSize: 14, color: colors.primary, fontWeight: '600' },
-  searchContainer: {
-    paddingHorizontal: spacing.screenPadding, marginBottom: 8,
-    position: 'relative',
+
+  // View toggle
+  viewToggle: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: colors.card, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  viewToggleText: { fontSize: 16, color: colors.text },
+  viewToggleLabel: { fontSize: 11, color: colors.textDim, fontWeight: '500' },
+
+  // Search
+  searchWrap: {
+    paddingHorizontal: spacing.screenPadding, marginBottom: 8, position: 'relative',
   },
   searchInput: {
     backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.button, paddingHorizontal: 14, paddingVertical: 12,
-    paddingRight: 40,
-    color: colors.text, fontSize: 15,
+    borderRadius: radii.button, paddingHorizontal: 14, paddingVertical: 11,
+    paddingRight: 40, color: colors.text, fontSize: 14,
   },
-  clearBtn: {
-    position: 'absolute', right: spacing.screenPadding + 10, top: 10,
-    padding: 4,
-  },
+  clearBtn: { position: 'absolute', right: spacing.screenPadding + 10, top: 9, padding: 4 },
   clearBtnText: { color: colors.textDim, fontSize: 16 },
-  categoryList: {
-    maxHeight: 48, // Fixed height to prevent overlap with product list
-    flexGrow: 0,
-  },
-  categoryBar: {
-    paddingHorizontal: spacing.screenPadding,
-    paddingBottom: 8,
-    gap: 6,
-  },
-  categoryTab: {
+
+  // Categories
+  catList: { maxHeight: 44, flexGrow: 0 },
+  catBar: { paddingHorizontal: spacing.screenPadding, paddingBottom: 6, gap: 6 },
+  catTab: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 12, paddingVertical: 8,
+    paddingHorizontal: 12, paddingVertical: 7,
     backgroundColor: colors.card, borderRadius: 20,
     borderWidth: 1, borderColor: colors.border,
   },
-  categoryTabActive: {
-    backgroundColor: 'rgba(37,99,235,0.12)',
-    borderColor: '#2563EB',
-  },
-  categoryIcon: { fontSize: 14 },
-  categoryLabel: { fontSize: 12, color: colors.textDim, fontWeight: '500' },
-  categoryLabelActive: { color: '#2563EB' },
-  categoryCount: { fontSize: 10, color: colors.textDim },
+  catTabActive: { backgroundColor: 'rgba(37,99,235,0.12)', borderColor: '#2563EB' },
+  catIcon: { fontSize: 13 },
+  catLabel: { fontSize: 11, color: colors.textDim, fontWeight: '500' },
+  catLabelActive: { color: '#2563EB' },
+  catCount: { fontSize: 10, color: colors.textDim },
+
+  // Info bar
   infoBar: {
-    paddingHorizontal: spacing.screenPadding, paddingVertical: 6,
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingHorizontal: spacing.screenPadding, paddingVertical: 5,
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   infoText: { fontSize: 11, color: colors.textDim },
-  list: { paddingHorizontal: spacing.screenPadding, paddingBottom: 80, paddingTop: 6 },
-  productRow: {
+
+  // ═══ LIST VIEW ═══
+  listContainer: { paddingHorizontal: spacing.screenPadding, paddingBottom: 80, paddingTop: 6 },
+  listRow: {
     flexDirection: 'row', alignItems: 'center',
-    padding: 12, paddingHorizontal: 14, gap: 10,
+    padding: 10, paddingHorizontal: 12, gap: 10,
     backgroundColor: colors.card, borderRadius: radii.button, marginBottom: 6,
   },
-  productThumb: {
-    width: 40, height: 40, borderRadius: 6,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+  listInfo: { flex: 1 },
+  listHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  listName: { fontSize: 13, fontWeight: '600', color: colors.text, flex: 1 },
+  listMeta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
+  listPrice: { fontSize: 13, color: colors.primary, fontWeight: '700' },
+  listStock: { fontSize: 11, color: '#22C55E' },
+  listWeight: { fontSize: 11, color: colors.textDim },
+  sep: { fontSize: 10, color: colors.textDim },
+
+  // ═══ GRID VIEW ═══
+  gridContainer: { paddingHorizontal: spacing.screenPadding, paddingBottom: 80, paddingTop: 6 },
+  gridRow: { justifyContent: 'space-between', marginBottom: GRID_GAP },
+  gridCard: {
+    width: GRID_CARD_WIDTH, backgroundColor: colors.card,
+    borderRadius: radii.card, overflow: 'hidden',
   },
-  productThumbPlaceholder: {
+  gridTouchArea: { padding: 10, alignItems: 'center' },
+  gridImgWrap: { width: '100%', alignItems: 'center', marginBottom: 8, position: 'relative' },
+  gridBadge: {
+    position: 'absolute', top: 4, right: 4,
+    backgroundColor: 'rgba(34,197,94,0.85)', borderRadius: 4,
+    paddingHorizontal: 5, paddingVertical: 2,
+  },
+  gridBadgeDim: { backgroundColor: 'rgba(139,149,163,0.6)' },
+  gridBadgeText: { fontSize: 9, color: '#FFF', fontWeight: '700' },
+  gridName: {
+    fontSize: 12, fontWeight: '600', color: colors.text,
+    textAlign: 'center', lineHeight: 16, minHeight: 32,
+  },
+  gridPrice: {
+    fontSize: 15, fontWeight: '700', color: colors.primary,
+    textAlign: 'center', marginTop: 4,
+  },
+  gridStock: {
+    fontSize: 11, color: '#22C55E', textAlign: 'center', marginTop: 2,
+  },
+  gridQtyRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 4, paddingVertical: 8,
+    borderTopWidth: 1, borderTopColor: colors.border,
+  },
+
+  // ═══ SHARED ═══
+  imgPlaceholder: {
+    borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.04)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: colors.border,
+  },
+  rowDisabled: { opacity: 0.4 },
+  textDim: { color: colors.textDim },
+  textRed: { color: '#EF4444' },
+
+  // Qty controls (list)
+  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: 8 },
+  qtyBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center', justifyContent: 'center',
   },
-  productRowDisabled: { opacity: 0.45 },
-  productHeader: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2,
-  },
-  productName: { fontSize: 14, fontWeight: '600', color: colors.text, flex: 1 },
-  productMeta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  productPrice: { fontSize: 12, color: colors.primary, fontWeight: '600' },
-  productSep: { fontSize: 10, color: colors.textDim },
-  productStock: { fontSize: 11, color: '#22C55E' },
-  productWeight: { fontSize: 11, color: colors.textDim },
-  textDisabled: { color: colors.textDim },
-  textOutOfStock: { color: '#EF4444' },
-  qtySelector: {
-    flexDirection: 'row', alignItems: 'center', gap: 2,
-    marginLeft: 10,
-  },
-  qtyBtn: {
-    width: 32, height: 32,
+  qtyBtnSm: {
+    width: 28, height: 28, borderRadius: 14,
     backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 16, alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
-  qtyBtnText: { fontSize: 18, color: colors.text, fontWeight: '600' },
-  qtyValue: {
-    fontSize: 16, fontWeight: '700', color: colors.text,
-    minWidth: 28, textAlign: 'center',
+  qtyBtnText: { fontSize: 17, color: colors.text, fontWeight: '600' },
+  qtyVal: {
+    fontSize: 15, fontWeight: '700', color: colors.text,
+    minWidth: 24, textAlign: 'center',
   },
-  qtyBtnDisabled: { opacity: 0.3 },
+  qtyBtnOff: { opacity: 0.3 },
+
+  // Banners
   fallbackBanner: {
     backgroundColor: colors.warningAlpha08,
     borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',

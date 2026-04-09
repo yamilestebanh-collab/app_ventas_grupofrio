@@ -17,7 +17,7 @@ import { useVisitStore, SaleLineItem } from '../../src/stores/useVisitStore';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { SaveIndicator } from '../../src/components/ui/SaveIndicator';
 import { useSyncStore } from '../../src/stores/useSyncStore';
-import { formatCurrency } from '../../src/utils/time';
+import { formatCurrency, formatPriceWithIVA } from '../../src/utils/time';
 import { takePhoto } from '../../src/services/camera';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
 
@@ -152,7 +152,7 @@ export default function SaleScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.productName}>{line.productName}</Text>
                 <Text style={styles.productInfo}>
-                  {formatCurrency(line.price)} · Stock: {line.stock}
+                  {formatPriceWithIVA(line.price)} c/IVA · Stock: {line.stock}
                 </Text>
               </View>
               <View style={styles.qtyControls}>
