@@ -6,17 +6,19 @@
  *   Each partner has property_product_pricelist → their specific pricelist
  *   Pricelist items define: fixed price, percentage discount, or formula
  *
- * This service:
- *   1. Loads the partner's pricelist ID from res.partner
- *   2. Loads pricelist items (rules) for that pricelist
- *   3. Computes final price per product
- *   4. Returns a Map<productId, price> for display
+ * IMPORTANT: property_product_pricelist is a "property" field stored in
+ * ir.property, NOT directly on res.partner. The custom /get_records endpoint
+ * does NOT return property fields. We MUST use direct JSON-RPC (search_read
+ * or read) to fetch it.
  *
- * If the partner has no pricelist or it's the public one, returns empty map
- * (caller falls back to list_price).
+ * Strategy:
+ *   1. Try odooRpc search_read on res.partner for property_product_pricelist
+ *   2. If that fails, read ir.property directly as fallback
+ *   3. Load pricelist items and compute prices manually
+ *   4. As ultimate fallback, try product.pricelist get_products_price
  */
 
-import { odooRead } from './odooRpc';
+import { odooRead, odooRpc } from './odooRpc';
 
 export interface PricelistItem {
   id: number;
@@ -37,39 +39,124 @@ const PRICELIST_ITEM_FIELDS = [
 ];
 
 /**
- * Load the partner's pricelist ID.
+ * Load the partner's pricelist ID using direct JSON-RPC.
+ *
+ * /get_records does NOT return property fields like property_product_pricelist.
+ * We use odooRpc → search_read which calls Odoo's native ORM and DOES
+ * resolve property fields correctly.
+ *
  * Returns null if no specific pricelist (= uses public).
  */
 export async function getPartnerPricelistId(partnerId: number): Promise<number | null> {
+  // ── Attempt 1: Direct JSON-RPC search_read ──
+  try {
+    const partners = await odooRpc<any[]>('res.partner', 'search_read', [
+      [['id', '=', partnerId]],
+    ], {
+      fields: ['property_product_pricelist'],
+      limit: 1,
+    });
+
+    console.log(`[pricelist] search_read res.partner ${partnerId}:`, JSON.stringify(partners));
+
+    if (partners && partners.length > 0) {
+      const pl = partners[0].property_product_pricelist;
+      if (Array.isArray(pl) && pl.length > 0) {
+        console.log(`[pricelist] Partner ${partnerId} pricelist: ${pl[0]} (${pl[1]})`);
+        return pl[0];
+      }
+      if (typeof pl === 'number' && pl > 0) {
+        console.log(`[pricelist] Partner ${partnerId} pricelist: ${pl}`);
+        return pl;
+      }
+      console.log(`[pricelist] Partner ${partnerId} has no pricelist (field=${JSON.stringify(pl)})`);
+    }
+  } catch (err) {
+    console.warn('[pricelist] search_read failed, trying ir.property fallback:', err);
+  }
+
+  // ── Attempt 2: Read ir.property directly ──
+  // property_product_pricelist is stored in ir.property with
+  // res_id = 'res.partner,{partnerId}'
+  try {
+    const props = await odooRpc<any[]>('ir.property', 'search_read', [
+      [
+        ['name', '=', 'property_product_pricelist'],
+        ['res_id', '=', `res.partner,${partnerId}`],
+      ],
+    ], {
+      fields: ['value_reference'],
+      limit: 1,
+    });
+
+    console.log(`[pricelist] ir.property fallback for partner ${partnerId}:`, JSON.stringify(props));
+
+    if (props && props.length > 0) {
+      const ref = props[0].value_reference; // e.g. "product.pricelist,3"
+      if (typeof ref === 'string' && ref.startsWith('product.pricelist,')) {
+        const plId = parseInt(ref.split(',')[1], 10);
+        if (!isNaN(plId) && plId > 0) {
+          console.log(`[pricelist] Partner ${partnerId} pricelist from ir.property: ${plId}`);
+          return plId;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[pricelist] ir.property fallback failed:', err);
+  }
+
+  // ── Attempt 3: /get_records as last resort ──
   try {
     const partners = await odooRead<any>('res.partner', [
       ['id', '=', partnerId],
     ], ['property_product_pricelist'], 1);
 
-    if (!partners || partners.length === 0) return null;
+    console.log(`[pricelist] /get_records fallback for partner ${partnerId}:`, JSON.stringify(partners));
 
-    const pl = partners[0].property_product_pricelist;
-    // Many2one: [id, name] or false
-    if (Array.isArray(pl) && pl.length > 0) return pl[0];
-    if (typeof pl === 'number') return pl;
-    return null;
-  } catch (error) {
-    console.warn('[pricelist] Failed to load partner pricelist:', error);
-    return null;
+    if (partners && partners.length > 0) {
+      const pl = partners[0].property_product_pricelist;
+      if (Array.isArray(pl) && pl.length > 0) return pl[0];
+      if (typeof pl === 'number' && pl > 0) return pl;
+    }
+  } catch (err) {
+    console.warn('[pricelist] /get_records fallback failed:', err);
   }
+
+  console.log(`[pricelist] No pricelist found for partner ${partnerId}, using public prices`);
+  return null;
 }
 
 /**
  * Load pricelist items (rules) for a given pricelist.
+ * Uses JSON-RPC search_read (primary) with /get_records fallback.
  */
 async function loadPricelistItems(pricelistId: number): Promise<PricelistItem[]> {
+  // Try direct JSON-RPC first
+  try {
+    const items = await odooRpc<PricelistItem[]>('product.pricelist.item', 'search_read', [
+      [['pricelist_id', '=', pricelistId]],
+    ], {
+      fields: PRICELIST_ITEM_FIELDS,
+      limit: 500,
+    });
+
+    if (items && items.length > 0) {
+      console.log(`[pricelist] Loaded ${items.length} pricelist items via search_read for pricelist ${pricelistId}`);
+      return items;
+    }
+  } catch (err) {
+    console.warn('[pricelist] search_read pricelist items failed:', err);
+  }
+
+  // Fallback to /get_records
   try {
     const items = await odooRead<PricelistItem>('product.pricelist.item', [
       ['pricelist_id', '=', pricelistId],
     ], PRICELIST_ITEM_FIELDS, 500);
+    console.log(`[pricelist] Loaded ${items?.length ?? 0} pricelist items via /get_records for pricelist ${pricelistId}`);
     return items || [];
   } catch (error) {
-    console.warn('[pricelist] Failed to load pricelist items:', error);
+    console.warn('[pricelist] /get_records pricelist items failed:', error);
     return [];
   }
 }
@@ -90,11 +177,16 @@ export async function computeCustomerPrices(
 ): Promise<Map<number, number>> {
   const priceMap = new Map<number, number>();
 
+  console.log(`[pricelist] Computing prices for partner ${partnerId}, ${products.length} products`);
+
   const pricelistId = await getPartnerPricelistId(partnerId);
   if (!pricelistId) return priceMap; // No custom pricelist, use public
 
   const items = await loadPricelistItems(pricelistId);
-  if (items.length === 0) return priceMap;
+  if (items.length === 0) {
+    console.log(`[pricelist] Pricelist ${pricelistId} has no items`);
+    return priceMap;
+  }
 
   // Sort items by specificity (most specific first)
   const sortedItems = [...items].sort((a, b) => {
@@ -163,6 +255,6 @@ export async function computeCustomerPrices(
     }
   }
 
-  console.log(`[pricelist] Computed ${priceMap.size} custom prices for partner ${partnerId}`);
+  console.log(`[pricelist] Computed ${priceMap.size} custom prices for partner ${partnerId} (pricelist ${pricelistId})`);
   return priceMap;
 }
