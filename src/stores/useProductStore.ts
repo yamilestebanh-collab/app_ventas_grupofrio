@@ -74,7 +74,8 @@ function estimateWeight(name: string, existingWeight: number | undefined): numbe
 const PRODUCT_FIELDS = [
   'id', 'name', 'default_code', 'list_price', 'qty_available',
   'sale_ok', 'product_tmpl_id', 'weight', 'categ_id',
-  'image_128', // BLD-20260408-P1: small product thumbnail
+  // BLD-20260409: removed image_128 — Odoo doesn't return binary fields
+  // via search_read/get_records. Images loaded via URL in ProductPicker.
 ];
 
 export const useProductStore = create<ProductState>((set, get) => ({

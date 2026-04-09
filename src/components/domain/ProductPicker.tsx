@@ -1,38 +1,35 @@
 /**
- * ProductPicker V2 — Dual view product selector.
+ * ProductPicker V2.1 — Dual view product selector.
  *
- * BLD-20260409: Complete rewrite for UX pilot feedback.
- *
- * Features:
- * - Dual view: list (compact) and grid (2 columns with images)
- * - Prices shown WITH IVA (precio final visible para el vendedor)
- * - Fuzzy search by name, code, or category
- * - Category tabs (fixed height, no overlap)
- * - Inline quantity selector
- * - Product images from Odoo image_128
- * - View preference persisted
+ * BLD-20260409-FIX: Fixes from real device testing:
+ * - Images: URL-based (/web/image/) instead of base64 (image_128 not returned by API)
+ * - Toggle: Uses text labels instead of unicode symbols, key prop forces FlatList remount
+ * - Prices: Supports customer-specific pricelist (not just public list_price)
+ * - IVA: Applied to display price (base * 1.16)
  *
  * PRICE LOGIC:
- *   Odoo list_price = base price WITHOUT IVA
- *   Visual price = list_price * 1.16 (IVA included)
- *   Internal SaleLineItem.price = list_price (base, for Odoo)
- *   This means the sale screen subtotal/tax/total breakdown is correct.
+ *   1. Check customer pricelist (priceMap from pricelist.ts)
+ *   2. If no custom price → use list_price (public)
+ *   3. Apply IVA 16% for display
+ *   4. SaleLineItem.price = base WITHOUT IVA (for Odoo sync)
  */
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, Modal, Image, Dimensions,
+  StyleSheet, Modal, Image, Dimensions, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useProductStore, TruckProduct } from '../../stores/useProductStore';
 import { useVisitStore, SaleLineItem } from '../../stores/useVisitStore';
 import { useKoldStore } from '../../stores/useKoldStore';
+import { getBaseUrl } from '../../services/api';
+import { computeCustomerPrices } from '../../services/pricelist';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
 import { typography, fonts } from '../../theme/typography';
-import { formatPriceWithIVA } from '../../utils/time';
+import { IVA_RATE, formatCurrency } from '../../utils/time';
 
 // ═══ Types ═══
 
@@ -45,7 +42,6 @@ interface ProductPickerProps {
   partnerId?: number;
 }
 
-// Category mapping based on real Odoo product categories
 const CATEGORIES = [
   { key: 'all', label: 'Todos', icon: '📦' },
   { key: 'hielo', label: 'Hielo', icon: '🧊' },
@@ -86,16 +82,17 @@ function fuzzyMatch(text: string, query: string): boolean {
   return words.every((w) => t.includes(w));
 }
 
-/** Check if product has a valid image from Odoo */
-function hasValidImage(p: TruckProduct): boolean {
-  return !!(p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 10);
+/** Format price with IVA for display — uses base price, applies 16% */
+function displayPrice(basePrice: number): string {
+  const safe = typeof basePrice === 'number' && !isNaN(basePrice) ? basePrice : 0;
+  return formatCurrency(safe * (1 + IVA_RATE));
 }
 
-// Enriched product type used internally
 type EnrichedProduct = TruckProduct & {
   category: CategoryKey;
   isRecommended: boolean;
   isAlreadyAdded: boolean;
+  customerPrice: number; // base price for this customer (may differ from list_price)
 };
 
 // ═══ Component ═══
@@ -111,6 +108,15 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
   const [activeCategory, setActiveCategory] = useState<CategoryKey>('all');
   const [quantities, setQuantities] = useState<Record<number, number>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [baseUrl, setBaseUrlState] = useState('');
+  // Customer pricelist
+  const [priceMap, setPriceMap] = useState<Map<number, number>>(new Map());
+  const [priceLoading, setPriceLoading] = useState(false);
+
+  // Load base URL for image URLs
+  useEffect(() => {
+    getBaseUrl().then(setBaseUrlState).catch(() => {});
+  }, []);
 
   // Load saved view preference
   useEffect(() => {
@@ -119,7 +125,25 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     }).catch(() => {});
   }, []);
 
-  // Save view preference on change
+  // Load customer-specific prices when picker opens with a partnerId
+  useEffect(() => {
+    if (!visible || !partnerId) {
+      setPriceMap(new Map());
+      return;
+    }
+    let cancelled = false;
+    setPriceLoading(true);
+    computeCustomerPrices(partnerId, products).then((map) => {
+      if (!cancelled) {
+        setPriceMap(map);
+        setPriceLoading(false);
+      }
+    }).catch(() => {
+      if (!cancelled) setPriceLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [visible, partnerId]);
+
   const toggleView = useCallback(() => {
     const next: ViewMode = viewMode === 'list' ? 'grid' : 'list';
     setViewMode(next);
@@ -134,15 +158,16 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     return new Set<number>();
   }, [partnerId, forecasts]);
 
-  // Enrich products
+  // Enrich products with customer price
   const enrichedProducts = useMemo(() => {
     return products.map((p) => ({
       ...p,
       category: categorizeProduct(p.name),
       isRecommended: recommendations.has(p.id),
       isAlreadyAdded: existingProductIds.includes(p.id),
+      customerPrice: priceMap.get(p.id) ?? p.list_price,
     }));
-  }, [products, recommendations, existingProductIds]);
+  }, [products, recommendations, existingProductIds, priceMap]);
 
   // Filter + sort
   const filtered = useMemo(() => {
@@ -182,11 +207,10 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     if (existingProductIds.includes(product.id)) return;
 
     const qty = quantities[product.id] || 1;
-    // IMPORTANT: SaleLineItem.price = list_price (base, sin IVA)
-    // The IVA is added in saleTotal() = subtotal * 1.16
-    // Visual display uses formatPriceWithIVA() separately.
-    const safePrice = (typeof product.list_price === 'number' && !isNaN(product.list_price))
-      ? product.list_price : 0;
+    // SaleLineItem.price = customer base price (sin IVA)
+    // IVA is computed in saleTotal() = subtotal * 1.16
+    const safePrice = (typeof product.customerPrice === 'number' && !isNaN(product.customerPrice))
+      ? product.customerPrice : 0;
     const line: SaleLineItem = {
       productId: product.id,
       productName: product.name,
@@ -201,26 +225,35 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     onClose();
   }
 
-  // ═══ Product Image Component ═══
+  // ═══ Product Image ═══
 
-  function ProductImage({ product, size }: { product: TruckProduct; size: number }) {
-    if (hasValidImage(product)) {
-      return (
-        <Image
-          source={{ uri: `data:image/png;base64,${product.image_128}` }}
-          style={{ width: size, height: size, borderRadius: 8 }}
-          resizeMode="cover"
-        />
-      );
-    }
-    // Placeholder with category-aware emoji
-    const cat = categorizeProduct(product.name);
+  function ProductImage({ productId, name, size }: { productId: number; name: string; size: number }) {
+    const cat = categorizeProduct(name);
     const emoji = cat === 'hielo' ? '🧊' : cat === 'cups' ? '🥤' :
                   cat === 'snack' ? '🍦' : cat === 'proteina' ? '🥩' : '📦';
+
+    // Use Odoo's /web/image endpoint — works without auth for public images
+    const imageUrl = baseUrl
+      ? `${baseUrl}/web/image/product.product/${productId}/image_128`
+      : '';
+
+    const [imgError, setImgError] = React.useState(false);
+
+    if (!imageUrl || imgError) {
+      return (
+        <View style={[styles.imgPlaceholder, { width: size, height: size }]}>
+          <Text style={{ fontSize: size * 0.4 }}>{emoji}</Text>
+        </View>
+      );
+    }
+
     return (
-      <View style={[styles.imgPlaceholder, { width: size, height: size }]}>
-        <Text style={{ fontSize: size * 0.45 }}>{emoji}</Text>
-      </View>
+      <Image
+        source={{ uri: imageUrl }}
+        style={{ width: size, height: size, borderRadius: 8 }}
+        resizeMode="cover"
+        onError={() => setImgError(true)}
+      />
     );
   }
 
@@ -231,10 +264,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     const alreadyAdded = p.isAlreadyAdded;
     const disabled = outOfStock || alreadyAdded;
     const qty = quantities[p.id] || 1;
+    const hasCustomPrice = priceMap.has(p.id);
 
     return (
       <View style={[styles.listRow, disabled && styles.rowDisabled]}>
-        <ProductImage product={p} size={44} />
+        <ProductImage productId={p.id} name={p.name} size={44} />
 
         <TouchableOpacity
           style={styles.listInfo}
@@ -251,25 +285,20 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           </View>
           <View style={styles.listMeta}>
             <Text style={[styles.listPrice, disabled && styles.textDim]}>
-              {formatPriceWithIVA(p.list_price)}
+              {displayPrice(p.customerPrice)}
             </Text>
+            {hasCustomPrice && <Text style={styles.customPriceTag}>cliente</Text>}
             <Text style={styles.sep}>·</Text>
             <Text style={[styles.listStock, outOfStock && styles.textRed]}>
               {outOfStock ? 'Agotado' : `${p.qty_display} disp.`}
             </Text>
-            {(p.weight ?? 0) > 0 && (
-              <>
-                <Text style={styles.sep}>·</Text>
-                <Text style={styles.listWeight}>{p.weight}kg</Text>
-              </>
-            )}
           </View>
         </TouchableOpacity>
 
         {!disabled && (
           <View style={styles.qtyRow}>
             <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(p.id, -1, p.qty_display)}>
-              <Text style={styles.qtyBtnText}>−</Text>
+              <Text style={styles.qtyBtnText}>-</Text>
             </TouchableOpacity>
             <Text style={styles.qtyVal}>{qty}</Text>
             <TouchableOpacity
@@ -292,6 +321,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     const alreadyAdded = p.isAlreadyAdded;
     const disabled = outOfStock || alreadyAdded;
     const qty = quantities[p.id] || 1;
+    const hasCustomPrice = priceMap.has(p.id);
 
     return (
       <View style={[styles.gridCard, disabled && styles.rowDisabled]}>
@@ -301,9 +331,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           disabled={disabled}
           style={styles.gridTouchArea}
         >
-          {/* Image */}
           <View style={styles.gridImgWrap}>
-            <ProductImage product={p} size={GRID_CARD_WIDTH - 20} />
+            <ProductImage productId={p.id} name={p.name} size={GRID_CARD_WIDTH - 24} />
             {p.isRecommended && (
               <View style={styles.gridBadge}>
                 <Text style={styles.gridBadgeText}>Sugerido</Text>
@@ -316,27 +345,26 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
             )}
           </View>
 
-          {/* Name */}
           <Text style={[styles.gridName, disabled && styles.textDim]} numberOfLines={2}>
             {p.name}
           </Text>
 
-          {/* Price with IVA */}
-          <Text style={[styles.gridPrice, disabled && styles.textDim]}>
-            {formatPriceWithIVA(p.list_price)}
-          </Text>
+          <View style={styles.gridPriceRow}>
+            <Text style={[styles.gridPrice, disabled && styles.textDim]}>
+              {displayPrice(p.customerPrice)}
+            </Text>
+            {hasCustomPrice && <Text style={styles.customPriceTagSm}>cliente</Text>}
+          </View>
 
-          {/* Stock */}
           <Text style={[styles.gridStock, outOfStock && styles.textRed]}>
-            {outOfStock ? 'Agotado' : `${p.qty_display} disponibles`}
+            {outOfStock ? 'Agotado' : `${p.qty_display} disp.`}
           </Text>
         </TouchableOpacity>
 
-        {/* Qty controls */}
         {!disabled && (
           <View style={styles.gridQtyRow}>
             <TouchableOpacity style={styles.qtyBtnSm} onPress={() => setQty(p.id, -1, p.qty_display)}>
-              <Text style={styles.qtyBtnText}>−</Text>
+              <Text style={styles.qtyBtnText}>-</Text>
             </TouchableOpacity>
             <Text style={styles.qtyVal}>{qty}</Text>
             <TouchableOpacity
@@ -353,22 +381,19 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
   }
 
   const inStockCount = filtered.filter((p) => p.qty_display > 0 && !p.isAlreadyAdded).length;
-  const recommendedCount = filtered.filter((p) => p.isRecommended).length;
+  const hasCustomPrices = priceMap.size > 0;
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <SafeAreaView style={styles.modal}>
-        {/* Header with view toggle */}
+        {/* Header */}
         <View style={styles.header}>
           <Text style={typography.screenTitle}>Agregar Producto</Text>
           <View style={styles.headerRight}>
-            {/* View toggle */}
+            {/* View toggle — plain text, works on all devices */}
             <TouchableOpacity style={styles.viewToggle} onPress={toggleView}>
-              <Text style={styles.viewToggleText}>
-                {viewMode === 'list' ? '▦' : '☰'}
-              </Text>
               <Text style={styles.viewToggleLabel}>
-                {viewMode === 'list' ? 'Grid' : 'Lista'}
+                {viewMode === 'list' ? 'Ver Grid' : 'Ver Lista'}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => { setSearch(''); setQuantities({}); onClose(); }}>
@@ -377,11 +402,11 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           </View>
         </View>
 
-        {/* Global fallback warning */}
+        {/* Banners */}
         {isGlobalFallback && (
           <View style={styles.fallbackBanner}>
             <Text style={styles.fallbackText}>
-              ⚠ Inventario global — stock puede no reflejar tu unidad
+              Inventario global — stock puede no reflejar tu unidad
             </Text>
           </View>
         )}
@@ -400,12 +425,12 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           />
           {search.length > 0 && (
             <TouchableOpacity style={styles.clearBtn} onPress={() => setSearch('')}>
-              <Text style={styles.clearBtnText}>✕</Text>
+              <Text style={styles.clearBtnText}>X</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        {/* Category tabs — fixed height, no overlap */}
+        {/* Category tabs */}
         <FlatList
           horizontal
           data={CATEGORIES}
@@ -431,14 +456,17 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
         <View style={styles.infoBar}>
           <Text style={styles.infoText}>
             {inStockCount} disponible{inStockCount !== 1 ? 's' : ''}
-            {recommendedCount > 0 ? ` · ${recommendedCount} sugerido${recommendedCount !== 1 ? 's' : ''}` : ''}
+            {priceLoading ? ' · Cargando precios...' : ''}
           </Text>
-          <Text style={styles.infoText}>Precios con IVA</Text>
+          <Text style={styles.infoText}>
+            {hasCustomPrices ? 'Precio cliente c/IVA' : 'Precio c/IVA'}
+          </Text>
         </View>
 
-        {/* Product list/grid */}
+        {/* Product list or grid — key forces FlatList remount on view change */}
         {viewMode === 'list' ? (
           <FlatList
+            key="product-list"
             data={filtered}
             renderItem={renderListItem}
             keyExtractor={(p) => String(p.id)}
@@ -450,6 +478,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           />
         ) : (
           <FlatList
+            key="product-grid"
             data={filtered}
             renderItem={renderGridItem}
             keyExtractor={(p) => String(p.id)}
@@ -489,7 +518,6 @@ function EmptyState({ search, activeCategory }: { search: string; activeCategory
 const styles = StyleSheet.create({
   modal: { flex: 1, backgroundColor: colors.bg },
 
-  // Header
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: spacing.screenPadding, paddingVertical: 12,
@@ -497,16 +525,12 @@ const styles = StyleSheet.create({
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   closeBtn: { fontSize: 14, color: colors.primary, fontWeight: '600' },
 
-  // View toggle
   viewToggle: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: colors.card, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6,
     borderWidth: 1, borderColor: colors.border,
   },
-  viewToggleText: { fontSize: 16, color: colors.text },
-  viewToggleLabel: { fontSize: 11, color: colors.textDim, fontWeight: '500' },
+  viewToggleLabel: { fontSize: 12, color: colors.primary, fontWeight: '600' },
 
-  // Search
   searchWrap: {
     paddingHorizontal: spacing.screenPadding, marginBottom: 8, position: 'relative',
   },
@@ -516,9 +540,8 @@ const styles = StyleSheet.create({
     paddingRight: 40, color: colors.text, fontSize: 14,
   },
   clearBtn: { position: 'absolute', right: spacing.screenPadding + 10, top: 9, padding: 4 },
-  clearBtnText: { color: colors.textDim, fontSize: 16 },
+  clearBtnText: { color: colors.textDim, fontSize: 16, fontWeight: '700' },
 
-  // Categories
   catList: { maxHeight: 44, flexGrow: 0 },
   catBar: { paddingHorizontal: spacing.screenPadding, paddingBottom: 6, gap: 6 },
   catTab: {
@@ -533,7 +556,6 @@ const styles = StyleSheet.create({
   catLabelActive: { color: '#2563EB' },
   catCount: { fontSize: 10, color: colors.textDim },
 
-  // Info bar
   infoBar: {
     flexDirection: 'row', justifyContent: 'space-between',
     paddingHorizontal: spacing.screenPadding, paddingVertical: 5,
@@ -556,6 +578,17 @@ const styles = StyleSheet.create({
   listStock: { fontSize: 11, color: '#22C55E' },
   listWeight: { fontSize: 11, color: colors.textDim },
   sep: { fontSize: 10, color: colors.textDim },
+  customPriceTag: {
+    fontSize: 9, color: '#22C55E', fontWeight: '700',
+    backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: 3,
+    paddingHorizontal: 4, paddingVertical: 1, overflow: 'hidden',
+  },
+  customPriceTagSm: {
+    fontSize: 8, color: '#22C55E', fontWeight: '700',
+    backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: 3,
+    paddingHorizontal: 3, paddingVertical: 1, overflow: 'hidden',
+    marginLeft: 3,
+  },
 
   // ═══ GRID VIEW ═══
   gridContainer: { paddingHorizontal: spacing.screenPadding, paddingBottom: 80, paddingTop: 6 },
@@ -577,9 +610,11 @@ const styles = StyleSheet.create({
     fontSize: 12, fontWeight: '600', color: colors.text,
     textAlign: 'center', lineHeight: 16, minHeight: 32,
   },
+  gridPriceRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 4,
+  },
   gridPrice: {
-    fontSize: 15, fontWeight: '700', color: colors.primary,
-    textAlign: 'center', marginTop: 4,
+    fontSize: 15, fontWeight: '700', color: colors.primary, textAlign: 'center',
   },
   gridStock: {
     fontSize: 11, color: '#22C55E', textAlign: 'center', marginTop: 2,
@@ -600,7 +635,6 @@ const styles = StyleSheet.create({
   textDim: { color: colors.textDim },
   textRed: { color: '#EF4444' },
 
-  // Qty controls (list)
   qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: 8 },
   qtyBtn: {
     width: 32, height: 32, borderRadius: 16,
@@ -619,7 +653,6 @@ const styles = StyleSheet.create({
   },
   qtyBtnOff: { opacity: 0.3 },
 
-  // Banners
   fallbackBanner: {
     backgroundColor: colors.warningAlpha08,
     borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',
