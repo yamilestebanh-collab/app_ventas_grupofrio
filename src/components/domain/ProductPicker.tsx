@@ -11,7 +11,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, Modal, Animated,
+  StyleSheet, Modal, Animated, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useProductStore, TruckProduct } from '../../stores/useProductStore';
@@ -134,10 +134,15 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     if (existingProductIds.includes(product.id)) return;
 
     const qty = quantities[product.id] || 1;
+    // BLD-20260408-P0: Guard against undefined/null list_price from Odoo.
+    // Without this, NaN propagates to subtotal/tax/total and the entire
+    // sale screen shows $NaN.
+    const safePrice = (typeof product.list_price === 'number' && !isNaN(product.list_price))
+      ? product.list_price : 0;
     const line: SaleLineItem = {
       productId: product.id,
       productName: product.name,
-      price: product.list_price,
+      price: safePrice,
       qty: Math.min(qty, product.qty_display),
       stock: product.qty_display,
       weight: product.weight || 5,
@@ -154,8 +159,23 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     const disabled = outOfStock || alreadyAdded;
     const qty = quantities[p.id] || 1;
 
+    // BLD-20260408-P1: Product thumbnail from Odoo image_128
+    const hasImage = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 10;
+
     return (
       <View style={[styles.productRow, disabled && styles.productRowDisabled]}>
+        {/* Product thumbnail */}
+        {hasImage ? (
+          <Image
+            source={{ uri: `data:image/png;base64,${p.image_128}` }}
+            style={styles.productThumb}
+          />
+        ) : (
+          <View style={[styles.productThumb, styles.productThumbPlaceholder]}>
+            <Text style={{ fontSize: 16 }}>📦</Text>
+          </View>
+        )}
+
         <TouchableOpacity
           style={{ flex: 1 }}
           onPress={() => !disabled && handleSelect(p)}
@@ -171,7 +191,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           </View>
           <View style={styles.productMeta}>
             <Text style={[styles.productPrice, disabled && styles.textDisabled]}>
-              ${p.list_price.toFixed(2)}
+              ${(p.list_price || 0).toFixed(2)}
             </Text>
             <Text style={styles.productSep}>·</Text>
             <Text style={[
@@ -257,13 +277,14 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           )}
         </View>
 
-        {/* Category tabs */}
+        {/* BLD-20260408-P1: Category tabs — fixed height to prevent overlap with product list */}
         <FlatList
           horizontal
           data={CATEGORIES}
           keyExtractor={(c) => c.key}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.categoryBar}
+          style={styles.categoryList}
           renderItem={({ item: cat }) => (
             <TouchableOpacity
               style={[
@@ -343,6 +364,10 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   clearBtnText: { color: colors.textDim, fontSize: 16 },
+  categoryList: {
+    maxHeight: 48, // Fixed height to prevent overlap with product list
+    flexGrow: 0,
+  },
   categoryBar: {
     paddingHorizontal: spacing.screenPadding,
     paddingBottom: 8,
@@ -370,8 +395,15 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: spacing.screenPadding, paddingBottom: 80, paddingTop: 6 },
   productRow: {
     flexDirection: 'row', alignItems: 'center',
-    padding: 12, paddingHorizontal: 14,
+    padding: 12, paddingHorizontal: 14, gap: 10,
     backgroundColor: colors.card, borderRadius: radii.button, marginBottom: 6,
+  },
+  productThumb: {
+    width: 40, height: 40, borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  productThumbPlaceholder: {
+    alignItems: 'center', justifyContent: 'center',
   },
   productRowDisabled: { opacity: 0.45 },
   productHeader: {

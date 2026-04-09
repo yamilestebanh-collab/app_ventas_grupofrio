@@ -72,15 +72,18 @@ export async function rehydrateAppState(): Promise<{
       }
     }
 
-    // 3. Products
+    // 3. Products — also restore inventorySource if available
     const products = await storeLoad<TruckProduct[]>(STORAGE_KEYS.PRODUCTS);
     if (products && products.length > 0) {
-      const totalKg = products.reduce((sum, p) => sum + p._totalKg, 0);
+      const totalKg = products.reduce((sum, p) => sum + (p._totalKg || 0), 0);
+      // BLD-20260408-P0: Determine inventorySource from rehydrated data
+      const hasGlobalFallback = products.some((p) => p._isGlobalFallback);
       useProductStore.setState({
         products,
         totalStockKg: Math.round(totalKg),
         productCount: products.length,
         lastSync: Date.now(),
+        inventorySource: hasGlobalFallback ? 'global_legacy' : 'truck_stock',
       });
       productCount = products.length;
     }

@@ -14,17 +14,19 @@ export function formatElapsed(totalSeconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-/** Format currency as $X,XXX.XX */
+/** Format currency as $X,XXX.XX — guards NaN/undefined/null */
 export function formatCurrency(amount: number): string {
-  return `$${amount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const safe = typeof amount === 'number' && !isNaN(amount) ? amount : 0;
+  return `$${safe.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Format currency compact as $X.Xk */
+/** Format currency compact as $X.Xk — guards NaN */
 export function formatCurrencyCompact(amount: number): string {
-  if (amount >= 1000) {
-    return `$${(amount / 1000).toFixed(1)}k`;
+  const safe = typeof amount === 'number' && !isNaN(amount) ? amount : 0;
+  if (safe >= 1000) {
+    return `$${(safe / 1000).toFixed(1)}k`;
   }
-  return `$${amount.toFixed(0)}`;
+  return `$${safe.toFixed(0)}`;
 }
 
 /** Format kg with unit */

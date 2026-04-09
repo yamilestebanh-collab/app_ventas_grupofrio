@@ -57,6 +57,16 @@ export default function RouteScreen() {
                   onPress={() => router.push('/ranking' as never)} style={{ flex: 1 }} />
         </View>
 
+        {/* BLD-20260408-P0: Off-route sale button */}
+        <Button
+          label="🔍 Venta fuera de ruta"
+          variant="secondary"
+          small
+          fullWidth
+          onPress={() => router.push('/offroute' as never)}
+          style={{ marginBottom: 10 }}
+        />
+
         {/* Stats row */}
         <View style={styles.statsRow}>
           {[

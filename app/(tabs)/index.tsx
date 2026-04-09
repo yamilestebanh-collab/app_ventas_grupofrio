@@ -16,7 +16,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
-import { useKoldStore } from '../../src/stores/useKoldStore';
+import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 
 export default function HomeScreen() {
@@ -37,9 +37,9 @@ export default function HomeScreen() {
     }
   }, [employeeId, isAuthenticated, isOnline, loadPlan]);
 
-  // FIX: Acceder directamente al estado en lugar de llamar a una función que genera un nuevo array
-  const alerts = useKoldStore((s) => s.alerts);
-  const koldAlerts = useMemo(() => alerts || [], [alerts]);
+  // BLD-20260408: Use getAlerts() method (not s.alerts property which doesn't exist)
+  const getAlerts = useKoldStore((s) => s.getAlerts);
+  const koldAlerts = useMemo(() => getAlerts() || [], [getAlerts]);
 
   // Next stops (pending + in_progress, max 4)
   const nextStops = useMemo(() => 
@@ -78,16 +78,12 @@ export default function HomeScreen() {
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-        {/* Weather card */}
+        {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}
         <View style={styles.weatherCard}>
-          <Text style={{ fontSize: 26 }}>☀️</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.weatherTemp}>--°C</Text>
-            <Text style={styles.weatherCity}>Sin datos de clima</Text>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={styles.weatherImpact}>--% demanda</Text>
-            <Text style={styles.weatherSub}>vs promedio</Text>
+          <Text style={{ fontSize: 22 }}>🌤️</Text>
+          <View style={{ flex: 1, marginLeft: 8 }}>
+            <Text style={styles.weatherCity}>Clima no disponible</Text>
+            <Text style={styles.weatherSub}>Proximamente en KOLD</Text>
           </View>
         </View>
 
@@ -117,7 +113,7 @@ export default function HomeScreen() {
         </View>
 
         {/* Intelligence alerts */}
-        {koldAlerts.slice(0, 3).map((alert, idx) => (
+        {koldAlerts.slice(0, 3).map((alert: KoldAlert, idx: number) => (
           <AlertBanner
             key={idx}
             icon={alert.type === 'critical' ? '🔴' : alert.type === 'warning' ? '🟡' : '🟢'}

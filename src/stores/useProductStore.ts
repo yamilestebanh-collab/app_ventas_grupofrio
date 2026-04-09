@@ -74,6 +74,7 @@ function estimateWeight(name: string, existingWeight: number | undefined): numbe
 const PRODUCT_FIELDS = [
   'id', 'name', 'default_code', 'list_price', 'qty_available',
   'sale_ok', 'product_tmpl_id', 'weight', 'categ_id',
+  'image_128', // BLD-20260408-P1: small product thumbnail
 ];
 
 export const useProductStore = create<ProductState>((set, get) => ({
@@ -86,6 +87,18 @@ export const useProductStore = create<ProductState>((set, get) => ({
   productCount: 0,
 
   loadProducts: async (warehouseId: number) => {
+    // BLD-20260408-P0: Guard against null/0 warehouseId — this was the root
+    // cause of inventory loading the global product list (104 products,
+    // 595k kg) instead of the truck's scoped stock.
+    if (!warehouseId || warehouseId <= 0) {
+      logWarn('inventory', 'load_skipped_no_warehouse', {
+        warehouseId,
+        message: 'Cannot load inventory without a valid warehouseId',
+      });
+      set({ error: 'Sin almacén asignado. Cierra sesión e inicia de nuevo.', isLoading: false });
+      return;
+    }
+
     set({ isLoading: true, error: null });
 
     // Preserve current reserved amounts (for refresh during active operations)
@@ -187,12 +200,20 @@ export const useProductStore = create<ProductState>((set, get) => ({
         .map((p) => {
           const weight = estimateWeight(p.name, p.weight);
           const reserved = prevReserved.get(p.id) || 0;
+          // BLD-20260408-P0: Sanitize numeric fields — Odoo may return
+          // null/false/undefined for list_price or qty_available.
+          const safePrice = (typeof p.list_price === 'number' && !isNaN(p.list_price))
+            ? p.list_price : 0;
+          const safeQty = (typeof p.qty_available === 'number' && !isNaN(p.qty_available))
+            ? p.qty_available : 0;
           return {
             ...p,
+            list_price: safePrice,
+            qty_available: safeQty,
             weight,
-            _totalKg: (p.qty_available || 0) * weight,
+            _totalKg: safeQty * weight,
             qty_reserved: reserved,
-            qty_display: Math.max(0, (p.qty_available || 0) - reserved),
+            qty_display: Math.max(0, safeQty - reserved),
             _isGlobalFallback: isGlobal,
           };
         })
