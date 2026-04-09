@@ -10,7 +10,7 @@ import { create } from 'zustand';
 import NetInfo from '@react-native-community/netinfo';
 import { setAuthTokens, clearAuthTokens, setBaseUrl } from '../services/api';
 import { signOut } from '../services/gfLogistics';
-import { storeRemove, STORAGE_KEYS } from '../persistence/storage';
+import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { useRouteStore } from './useRouteStore';
 
 interface AuthState {
@@ -49,6 +49,7 @@ interface AuthState {
   login: (baseUrl: string, barcode: string, pin: string, db: string) => Promise<boolean>;
   logout: () => Promise<void>;
   setLoading: (loading: boolean) => void;
+  rehydrateAuth: () => Promise<boolean>;
 }
 
 // ============================================================
@@ -127,6 +128,61 @@ export const useAuthStore = create<AuthState>((set) => ({
   customerIds: [],
 
   setLoading: (loading) => set({ isLoading: loading }),
+
+  /**
+   * BLD-20260408-P0: Restore employee data from AsyncStorage.
+   * Called on startup BEFORE setting isAuthenticated.
+   * Returns true if a valid session was restored (employeeId + warehouseId present).
+   */
+  rehydrateAuth: async () => {
+    try {
+      const saved = await storeLoad<Record<string, unknown>>(STORAGE_KEYS.AUTH_STATE);
+      if (!saved || typeof saved !== 'object') return false;
+
+      const employeeId = typeof saved.employeeId === 'number' ? saved.employeeId : null;
+      const warehouseId = typeof saved.warehouseId === 'number' ? saved.warehouseId : null;
+
+      // A valid session MUST have employeeId and warehouseId.
+      // Without them, inventory and route loading will fail silently.
+      if (!employeeId || !warehouseId) {
+        console.warn('[auth] Rehydrate: missing employeeId or warehouseId, forcing re-login');
+        await storeRemove(STORAGE_KEYS.AUTH_STATE);
+        return false;
+      }
+
+      set({
+        isAuthenticated: true,
+        employeeId,
+        employeeName: typeof saved.employeeName === 'string' ? saved.employeeName : '',
+        companyId: typeof saved.companyId === 'number' ? saved.companyId : null,
+        companyName: typeof saved.companyName === 'string' ? saved.companyName : '',
+        warehouseId,
+        warehouseName: typeof saved.warehouseName === 'string' ? saved.warehouseName : '',
+        parentId: typeof saved.parentId === 'number' ? saved.parentId : null,
+        isSupervisor: !!saved.isSupervisor,
+        allowCreateCustomer: !!saved.allowCreateCustomer,
+        allowFreeVisitsMode: !!saved.allowFreeVisitsMode,
+        allowConfirmPayment: !!saved.allowConfirmPayment,
+        allowDeliveryScreen: !!saved.allowDeliveryScreen,
+        allowSalesDirectInvoice: !!saved.allowSalesDirectInvoice,
+        allowOffDateVisits: !!saved.allowOffDateVisits,
+        allowOffDistanceVisits: !!saved.allowOffDistanceVisits,
+        maxCashLimit: typeof saved.maxCashLimit === 'number' ? saved.maxCashLimit : 0,
+        stockValueLimit: typeof saved.stockValueLimit === 'number' ? saved.stockValueLimit : 0,
+        mustTakePhotosToEndVisit: true,
+        blockSaleIfUnpaidInvoices: false,
+        defaultPaymentJournalId: typeof saved.defaultPaymentJournalId === 'number' ? saved.defaultPaymentJournalId : null,
+        defaultCashAccountId: typeof saved.defaultCashAccountId === 'number' ? saved.defaultCashAccountId : null,
+        customerIds: Array.isArray(saved.customerIds) ? saved.customerIds as number[] : [],
+      });
+
+      console.log(`[auth] Rehydrated: employee=${employeeId}, warehouse=${warehouseId}`);
+      return true;
+    } catch (error) {
+      console.error('[auth] Rehydrate failed:', error);
+      return false;
+    }
+  },
 
   login: async (baseUrl, barcode, pin, db) => {
     set({ isLoading: true, error: null });
@@ -246,6 +302,31 @@ export const useAuthStore = create<AuthState>((set) => ({
         customerIds: (pick<number[]>(emp, 'customerIds', 'customer_ids') as number[]) ?? [],
       });
 
+      // BLD-20260408-P0: Persist auth state so it survives app restart.
+      const state = useAuthStore.getState();
+      await storeSave(STORAGE_KEYS.AUTH_STATE, {
+        employeeId: state.employeeId,
+        employeeName: state.employeeName,
+        companyId: state.companyId,
+        companyName: state.companyName,
+        warehouseId: state.warehouseId,
+        warehouseName: state.warehouseName,
+        parentId: state.parentId,
+        isSupervisor: state.isSupervisor,
+        allowCreateCustomer: state.allowCreateCustomer,
+        allowFreeVisitsMode: state.allowFreeVisitsMode,
+        allowConfirmPayment: state.allowConfirmPayment,
+        allowDeliveryScreen: state.allowDeliveryScreen,
+        allowSalesDirectInvoice: state.allowSalesDirectInvoice,
+        allowOffDateVisits: state.allowOffDateVisits,
+        allowOffDistanceVisits: state.allowOffDistanceVisits,
+        maxCashLimit: state.maxCashLimit,
+        stockValueLimit: state.stockValueLimit,
+        defaultPaymentJournalId: state.defaultPaymentJournalId,
+        defaultCashAccountId: state.defaultCashAccountId,
+        customerIds: state.customerIds,
+      });
+
       return true;
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Error de conexion';
@@ -260,6 +341,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     } finally {
       await clearRouteCache();
       await clearAuthTokens();
+      await storeRemove(STORAGE_KEYS.AUTH_STATE);
       set({
         isAuthenticated: false,
         employeeId: null,

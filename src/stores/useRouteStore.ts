@@ -26,6 +26,7 @@ interface RouteState {
   // Actions
   loadPlan: () => Promise<void>;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
+  addVirtualStop: (customerId: number, customerName: string) => number;
   reset: () => void;
 }
 
@@ -98,6 +99,26 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       const msg = error instanceof Error ? error.message : 'Error cargando plan';
       set({ error: msg, isLoading: false });
     }
+  },
+
+  /**
+   * BLD-20260408-P0: Create a virtual stop for off-route sales.
+   * Uses negative IDs to distinguish from real backend stops.
+   * Returns the virtual stop ID for navigation.
+   */
+  addVirtualStop: (customerId, customerName) => {
+    const virtualId = -(Date.now() % 1000000); // negative to avoid collision
+    const virtualStop: GFStop = {
+      id: virtualId,
+      customer_id: customerId,
+      customer_name: customerName,
+      state: 'pending',
+      source_model: 'gf.route.stop',
+      route_sequence: 999,
+    };
+    const stops = [...get().stops, virtualStop];
+    set({ stops, stopsTotal: stops.length });
+    return virtualId;
   },
 
   updateStopState: (stopId, state) => {

@@ -90,11 +90,15 @@ export default function SaleScreen() {
     // V1.2: Lock to prevent duplicate
     const operationId = lockSaleConfirm();
 
+    // BLD-20260408-P0: Detect off-route sales (virtual stops have negative IDs)
+    const isOffRoute = stop.id < 0;
+
     // Create sale order payload with idempotency key
     const payload = {
       _operationId: operationId,
       partner_id: stop.customer_id,
-      stop_id: stop.id,
+      stop_id: isOffRoute ? null : stop.id, // Don't send negative virtual IDs to backend
+      is_offroute: isOffRoute,
       payment_method: salePaymentMethod,
       lines: saleLines.map((l) => ({
         product_id: l.productId,
@@ -183,6 +187,7 @@ export default function SaleScreen() {
           visible={pickerVisible}
           onClose={() => setPickerVisible(false)}
           existingProductIds={saleLines.map((l) => l.productId)}
+          partnerId={stop.customer_id}
         />
 
         {/* Totals card */}

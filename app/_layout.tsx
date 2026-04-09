@@ -49,25 +49,34 @@ export default function RootLayout() {
     async function initApp() {
       console.log('[Init] Starting app initialization...');
       try {
-        // 1. Check auth
+        // 1. Check auth tokens + restore employee data
         const hasTokens = await hasAuthTokens();
         console.log('[Init] Auth tokens found:', hasTokens);
         if (hasTokens) {
-          useAuthStore.setState({ isAuthenticated: true });
-          
-          // 2. Rehydrate state
-          console.log('[Init] Rehydrating app state...');
-          await rehydrateAppState().catch(e => console.error('Rehydrate failed', e));
+          // BLD-20260408-P0: Restore full employee state (employeeId, warehouseId, etc.)
+          // from AsyncStorage. If essential fields are missing, force re-login.
+          const authValid = await useAuthStore.getState().rehydrateAuth();
+          if (!authValid) {
+            console.warn('[Init] Auth tokens exist but employee data missing — forcing login');
+            // Clear stale tokens so user gets login screen
+            const { clearAuthTokens: clearTokens } = await import('../src/services/api');
+            await clearTokens();
+            // Don't set isAuthenticated — user will see login screen
+          } else {
+            // 2. Rehydrate other state (sync queue, route, products)
+            console.log('[Init] Rehydrating app state...');
+            await rehydrateAppState().catch(e => console.error('Rehydrate failed', e));
 
-          // 3. GPS Initialization (esto suele pedir permisos y trabar si no se responde)
-          console.log('[Init] Initializing GPS...');
-          await initializeGPS().catch(e => console.error('GPS init failed', e));
-          startLocationWatch();
-          
-          try {
-            await startBackgroundTracking();
-          } catch (e) {
-            console.log('[gps] Background tracking not available');
+            // 3. GPS Initialization
+            console.log('[Init] Initializing GPS...');
+            await initializeGPS().catch(e => console.error('GPS init failed', e));
+            startLocationWatch();
+
+            try {
+              await startBackgroundTracking();
+            } catch (e) {
+              console.log('[gps] Background tracking not available');
+            }
           }
         }
 

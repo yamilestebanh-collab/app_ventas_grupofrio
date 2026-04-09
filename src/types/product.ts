@@ -15,6 +15,8 @@ export interface Product {
   product_tmpl_id: OdooMany2one;
   weight?: number;
   categ_id?: OdooMany2one;
+  // BLD-20260408-P1: Product image (base64 from Odoo, smallest available)
+  image_128?: string | false;
 }
 
 export type SaleOrderState = 'draft' | 'sent' | 'sale' | 'done' | 'cancel';

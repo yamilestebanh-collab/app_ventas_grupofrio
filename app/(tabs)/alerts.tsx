@@ -11,24 +11,24 @@ import { TopBar } from '../../src/components/ui/TopBar';
 import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
-import { useKoldStore } from '../../src/stores/useKoldStore';
+import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 
 export default function AlertsScreen() {
   const router = useRouter();
   
-  // FIX: Acceder directamente a las alertas y usar useMemo
-  const alerts = useKoldStore((s) => s.alerts);
-  const koldAlerts = useMemo(() => alerts || [], [alerts]);
+  // BLD-20260408: Use getAlerts() method (not s.alerts property which doesn't exist)
+  const getAlerts = useKoldStore((s) => s.getAlerts);
+  const koldAlerts = useMemo(() => getAlerts() || [], [getAlerts]);
   
   const scoreAvailable = useKoldStore((s) => s.scoreModuleAvailable);
   const { pendingCount, errorCount } = useSyncStore();
   const { stopsTotal, stopsCompleted } = useRouteStore();
 
-  const criticalAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'critical'), [koldAlerts]);
-  const warningAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'warning'), [koldAlerts]);
-  const opportunityAlerts = useMemo(() => koldAlerts.filter((a) => a.type === 'opportunity'), [koldAlerts]);
+  const criticalAlerts = useMemo(() => koldAlerts.filter((a: KoldAlert) => a.type === 'critical'), [koldAlerts]);
+  const warningAlerts = useMemo(() => koldAlerts.filter((a: KoldAlert) => a.type === 'warning'), [koldAlerts]);
+  const opportunityAlerts = useMemo(() => koldAlerts.filter((a: KoldAlert) => a.type === 'opportunity'), [koldAlerts]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -64,7 +64,7 @@ export default function AlertsScreen() {
         {criticalAlerts.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>CRITICAS</Text>
-            {criticalAlerts.map((alert, idx) => (
+            {criticalAlerts.map((alert: KoldAlert, idx: number) => (
               <TouchableOpacity
                 key={idx}
                 style={[styles.alertCard, styles.alertCritical]}
@@ -87,7 +87,7 @@ export default function AlertsScreen() {
         {warningAlerts.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>ATENCION</Text>
-            {warningAlerts.map((alert, idx) => (
+            {warningAlerts.map((alert: KoldAlert, idx: number) => (
               <TouchableOpacity
                 key={idx}
                 style={[styles.alertCard, styles.alertWarning]}
@@ -109,7 +109,7 @@ export default function AlertsScreen() {
         {opportunityAlerts.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>OPORTUNIDADES</Text>
-            {opportunityAlerts.map((alert, idx) => (
+            {opportunityAlerts.map((alert: KoldAlert, idx: number) => (
               <TouchableOpacity
                 key={idx}
                 style={[styles.alertCard, styles.alertOpportunity]}
