@@ -363,7 +363,7 @@ const styles = StyleSheet.create({
   },
   photoReq: {
     backgroundColor: colors.cardLighter,
-    borderWidth: 2, borderStyle: 'dashed', borderColor: 'rgba(255,107,53,0.3)',
+    borderWidth: 2, borderStyle: 'dashed', borderColor: 'rgba(37,99,235,0.3)',
     borderRadius: radii.card, padding: 28, alignItems: 'center', gap: 6,
   },
   photoDone: {

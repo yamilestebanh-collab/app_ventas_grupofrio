@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
     opacity: 0.65,
   },
   cardActive: {
-    backgroundColor: 'rgba(255,107,53,0.03)',
+    backgroundColor: 'rgba(37,99,235,0.03)',
   },
   row: {
     flexDirection: 'row',

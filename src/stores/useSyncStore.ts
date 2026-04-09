@@ -1,29 +1,56 @@
 /**
- * Sync queue store — offline operation management with PERSISTENCE.
+ * Sync queue store V2 — offline operation management with PERSISTENCE.
  *
- * F6 UPGRADE:
- * - Queue persists to AsyncStorage (survives app close)
- * - Rehydration on app start
- * - Idempotency via unique operation IDs
- * - Retry logic with backoff
- * - FIFO processing
- * - Status tracking
+ * V2 CHANGES (from blueprint):
+ * - Priority-based processing: P1 (business) > P2 (media) > P3 (telemetry)
+ * - GPS batch processing with concurrent-5 fallback
+ * - Backoff with jitter: 2s / 8s / 30s (±20%)
+ * - 'dead' status after MAX_RETRIES with rollback
+ * - Rollback for sale_order, unload, AND refill
+ * - Structured logging (no __DEV__ guards on critical logs)
+ * - Crash recovery: syncing → pending on rehydrate
  *
- * From KOLD_FIELD_SPEC.md section 6.
+ * NON-NEGOTIABLE RULES ENFORCED:
+ * - GPS (P3) NEVER blocks business (P1) operations
+ * - Every enqueued item has an idempotency key (_operationId)
+ * - Legacy ±5min dedup for sales KEPT until B.3 (server-side idempotency)
+ * - Rollback never leaves stock corrupted
  */
 
 import { create } from 'zustand';
-import { SyncQueueItem, SyncItemType, SyncItemStatus } from '../types/sync';
+import {
+  SyncQueueItem,
+  SyncItemType,
+  SyncItemStatus,
+  SyncPriority,
+  SYNC_PRIORITY_MAP,
+} from '../types/sync';
 import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
-import { api, postRest, postRpc } from '../services/api';
-// F7: Photo base64 reading at sync time (not at enqueue)
-import { readPhotoAsBase64 } from '../services/camera';
+import { postRpc, postRest } from '../services/api';
+import {
+  readPhotoAsBase64,
+  deletePhoto,
+  cleanupOrphanPhotos,
+  PHOTO_DELETE_ON_SYNC_ENABLED,
+  PHOTO_JANITOR_ENABLED,
+  photoCounters,
+} from '../services/camera';
 import { checkIn, checkOut, reportIncident, uploadStopImage } from '../services/gfLogistics';
-// V1.2.1: Inventory rollback on failed sales
-// CROSS-STORE DEP: rollback inventory on failed sale sync. Documented in V1.3.1.
 import { useProductStore } from './useProductStore';
+import { makeClientEventMeta } from '../utils/clientEvent';
+import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
+import { logInfo, logWarn, logError } from '../utils/logger';
+
+// ═══ Constants ═══
 
 const MAX_RETRIES = 3;
+const MAX_ITEMS_PER_CYCLE = 200;
+const GPS_BATCH_SIZE = 50;
+const GPS_CONCURRENCY = 5;
+
+// Backoff: 2s, 8s, 30s with ±20% jitter
+const BACKOFF_SCHEDULE_MS = [2000, 8000, 30000];
+const BACKOFF_JITTER = 0.2;
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -32,38 +59,83 @@ function uuid(): string {
   });
 }
 
+function calculateBackoff(retryCount: number): number {
+  const base = BACKOFF_SCHEDULE_MS[Math.min(retryCount, BACKOFF_SCHEDULE_MS.length - 1)];
+  const jitter = base * BACKOFF_JITTER * (Math.random() * 2 - 1);
+  return Math.round(base + jitter);
+}
+
+// ═══ Store interface ═══
+
 interface SyncState {
   queue: SyncQueueItem[];
   isOnline: boolean;
   isSyncing: boolean;
   lastSyncAt: number | null;
 
-  // Derived
+  // Derived counts
   pendingCount: number;
   errorCount: number;
+  deadCount: number;
+
+  // V2: cycle metrics (for observability)
+  lastCycleMetrics: CycleMetrics | null;
 
   // Actions
-  enqueue: (type: SyncItemType, payload: Record<string, unknown>) => string;
+  enqueue: (
+    type: SyncItemType,
+    payload: Record<string, unknown>,
+    opts?: { dependsOn?: string[] },
+  ) => string;
   markDone: (id: string) => void;
   markError: (id: string, message: string) => void;
+  markDead: (id: string, message: string) => void;
   setOnline: (online: boolean) => void;
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
 
-  // F6: Persistence
+  // Persistence
   persistQueue: () => Promise<void>;
   rehydrateQueue: () => Promise<void>;
 
-  // F6: Sync processor
+  // V2: Sync processor with priority
   processQueue: () => Promise<void>;
+
+  // V2: helpers for diagnostics
+  getQueueSummary: () => QueueSummary;
+  countByType: (type: SyncItemType) => number;
+}
+
+interface CycleMetrics {
+  cycle_start: number;
+  cycle_end: number;
+  cycle_duration_ms: number;
+  items_processed: number;
+  items_succeeded: number;
+  items_failed: number;
+  items_by_priority: Record<number, number>;
+}
+
+interface QueueSummary {
+  total: number;
+  pending: number;
+  syncing: number;
+  done: number;
+  error: number;
+  dead: number;
+  by_type: Record<string, number>;
+  oldest_pending_age_ms: number | null;
 }
 
 function computeCounts(queue: SyncQueueItem[]) {
   return {
     pendingCount: queue.filter((i) => i.status === 'pending').length,
     errorCount: queue.filter((i) => i.status === 'error').length,
+    deadCount: queue.filter((i) => i.status === 'dead').length,
   };
 }
+
+// ═══ Store ═══
 
 export const useSyncStore = create<SyncState>((set, get) => ({
   queue: [],
@@ -72,26 +144,70 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   lastSyncAt: null,
   pendingCount: 0,
   errorCount: 0,
+  deadCount: 0,
+  lastCycleMetrics: null,
 
-  enqueue: (type, payload) => {
+  // ═══ Enqueue ═══
+
+  enqueue: (type, payload, opts) => {
     const id = uuid();
+    const priority = SYNC_PRIORITY_MAP[type] ?? 3;
+
     const item: SyncQueueItem = {
       id,
       type,
-      payload: { ...payload, _operationId: id }, // Idempotency key
+      payload: { ...payload, _operationId: id },
       status: 'pending',
       created_at: Date.now(),
       retries: 0,
       error_message: null,
+      priority,
+      next_retry_at: null,
+      dependsOn: opts?.dependsOn && opts.dependsOn.length > 0 ? [...opts.dependsOn] : undefined,
     };
-    const newQueue = [...get().queue, item];
+
+    // GPS cap eviction (only for GPS type)
+    let baseQueue = get().queue;
+    if (type === 'gps') {
+      try {
+        const victimId = pickGpsOverflowVictim(
+          baseQueue.map((i) => ({
+            id: i.id,
+            type: i.type,
+            status: i.status,
+            created_at: i.created_at,
+          })),
+        );
+        if (victimId) {
+          baseQueue = baseQueue.filter((i) => i.id !== victimId);
+          logInfo('gps', 'cap_eviction', { victimId });
+        }
+      } catch {
+        // keep baseQueue unchanged
+      }
+    }
+
+    const newQueue = [...baseQueue, item];
     set({ queue: newQueue, ...computeCounts(newQueue) });
 
-    // Persist immediately
+    // Persist immediately (fire-and-forget)
     get().persistQueue();
+
+    logInfo('sync', 'enqueue', { id, type, priority });
+
+    // BLD-008: client event metadata (async, never blocks enqueue)
+    makeClientEventMeta(id)
+      .then((meta) => {
+        const updated = get().queue.map((i) => (i.id === id ? { ...i, meta } : i));
+        set({ queue: updated });
+        get().persistQueue();
+      })
+      .catch(() => {});
 
     return id;
   },
+
+  // ═══ Status transitions ═══
 
   markDone: (id) => {
     const newQueue = get().queue.map((i) =>
@@ -102,19 +218,48 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   },
 
   markError: (id, message) => {
+    const item = get().queue.find((i) => i.id === id);
+    if (!item) return;
+
+    const newRetries = item.retries + 1;
+    const backoffMs = calculateBackoff(newRetries - 1);
+
     const newQueue = get().queue.map((i) =>
       i.id === id
-        ? { ...i, status: 'error' as SyncItemStatus, error_message: message, retries: i.retries + 1 }
+        ? {
+            ...i,
+            status: 'error' as SyncItemStatus,
+            error_message: message,
+            retries: newRetries,
+            next_retry_at: Date.now() + backoffMs,
+          }
         : i
     );
     set({ queue: newQueue, ...computeCounts(newQueue) });
     get().persistQueue();
+
+    logWarn('sync', 'item_error', {
+      id, type: item.type, retries: newRetries,
+      next_retry_ms: backoffMs, message,
+    });
+  },
+
+  markDead: (id, message) => {
+    const newQueue = get().queue.map((i) =>
+      i.id === id
+        ? { ...i, status: 'dead' as SyncItemStatus, error_message: message }
+        : i
+    );
+    set({ queue: newQueue, ...computeCounts(newQueue) });
+    get().persistQueue();
+
+    logError('sync', 'item_dead', { id, message });
   },
 
   setOnline: (online) => {
     set({ isOnline: online });
-    // Auto-process when coming back online
     if (online && get().pendingCount > 0) {
+      logInfo('sync', 'reconnect_trigger', { pending: get().pendingCount });
       get().processQueue();
     }
   },
@@ -127,7 +272,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     get().persistQueue();
   },
 
-  // ═══ F6: Persistence ═══
+  // ═══ Persistence ═══
 
   persistQueue: async () => {
     const { queue } = get();
@@ -139,74 +284,431 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   rehydrateQueue: async () => {
     const saved = await storeLoad<SyncQueueItem[]>(STORAGE_KEYS.SYNC_QUEUE);
     if (saved && saved.length > 0) {
-      // Reset any "syncing" items back to "pending" (app was killed mid-sync)
       const restored = saved.map((item) => ({
         ...item,
-        status: item.status === 'syncing' ? 'pending' as SyncItemStatus : item.status,
+        // V2: crash recovery — syncing items reset to pending
+        status: item.status === 'syncing' ? ('pending' as SyncItemStatus) : item.status,
+        // V2: ensure priority exists (migration from V1 items without priority)
+        priority: item.priority ?? (SYNC_PRIORITY_MAP[item.type] || 3),
+        // V2: ensure next_retry_at exists
+        next_retry_at: item.next_retry_at ?? null,
       }));
       set({ queue: restored, ...computeCounts(restored) });
-      if (__DEV__) console.log(`[sync] Rehydrated ${restored.length} queued operations`);
+      logInfo('sync', 'rehydrate', {
+        total: restored.length,
+        syncing_recovered: saved.filter((i) => i.status === 'syncing').length,
+      });
     }
   },
 
-  // ═══ F6: Sync Processor ═══
+  // ═══ V2: Priority-based Sync Processor ═══
 
   processQueue: async () => {
     const { queue, isOnline, isSyncing } = get();
     if (!isOnline || isSyncing) return;
 
-    const pending = queue.filter((i) =>
-      i.status === 'pending' || (i.status === 'error' && i.retries < MAX_RETRIES)
-    );
+    const now = Date.now();
 
-    if (pending.length === 0) return;
+    // Items eligible for processing:
+    // - pending with no backoff, OR
+    // - error with retries < MAX and backoff elapsed
+    const isReady = (item: SyncQueueItem): boolean => {
+      if (item.status === 'pending') return true;
+      if (item.status === 'error' && item.retries < MAX_RETRIES) {
+        if (item.next_retry_at && now < item.next_retry_at) return false;
+        return true;
+      }
+      return false;
+    };
+
+    const candidates = queue.filter(isReady);
+    if (candidates.length === 0) return;
 
     set({ isSyncing: true });
-    if (__DEV__) console.log(`[sync] Processing ${pending.length} queued operations`);
+    const cycleStart = Date.now();
+    let processed = 0;
+    let succeeded = 0;
+    let failed = 0;
 
-    for (const item of pending) {
-      // Mark as syncing
-      const updatedQueue = get().queue.map((i) =>
-        i.id === item.id ? { ...i, status: 'syncing' as SyncItemStatus } : i
-      );
-      set({ queue: updatedQueue });
+    logInfo('sync', 'cycle_start', { candidates: candidates.length });
 
-      try {
-        // V1.2.1: Check for duplicate before sending sale
-        if (item.type === 'sale_order') {
-          const isDuplicate = await checkSaleDuplicate(item);
-          if (isDuplicate) {
-            get().markDone(item.id);
-            if (__DEV__) console.log(`[sync] Skipped duplicate: ${item.type} ${item.id}`);
-            continue;
-          }
-        }
+    // ── STEP 1: Separate by priority ──
+    const p1 = candidates.filter((i) => i.priority === 1);
+    const p2 = candidates.filter((i) => i.priority === 2);
+    const p3 = candidates.filter((i) => i.priority === 3);
 
-        await processSyncItem(item);
-        get().markDone(item.id);
-        if (__DEV__) console.log(`[sync] Done: ${item.type} ${item.id}`);
-      } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : 'Sync error';
-        get().markError(item.id, msg);
-        console.warn(`[sync] Error: ${item.type} ${item.id}: ${msg}`);
+    // ── STEP 2: Process P1 (business) — serial, with DAG ordering ──
+    const orderedP1 = computeProcessingOrder(queue, p1).slice(0, MAX_ITEMS_PER_CYCLE);
+    for (const item of orderedP1) {
+      const result = await processOneItem(item, get, set);
+      processed++;
+      if (result) succeeded++;
+      else failed++;
 
-        // V1.2.1: If max retries reached, rollback local side effects
-        if (item.retries + 1 >= MAX_RETRIES) {
-          console.error(`[sync] Max retries reached for ${item.type} ${item.id}`);
-          rollbackFailedOperation(item);
-        }
-      }
+      // If a business item fails and its retries are now >= MAX_RETRIES,
+      // we don't stop the whole cycle — other independent items can proceed.
     }
 
-    set({ isSyncing: false, lastSyncAt: Date.now() });
+    // ── STEP 3: Process P2 (media) — serial, FIFO ──
+    const orderedP2 = [...p2].sort((a, b) => a.created_at - b.created_at)
+      .slice(0, MAX_ITEMS_PER_CYCLE - processed);
+    for (const item of orderedP2) {
+      const result = await processOneItem(item, get, set);
+      processed++;
+      if (result) succeeded++;
+      else failed++;
+    }
+
+    // ── STEP 4: Process P3 (telemetry) — GPS batched, others serial ──
+    const gpsItems = p3.filter((i) => i.type === 'gps')
+      .sort((a, b) => a.created_at - b.created_at);
+    const otherP3 = p3.filter((i) => i.type !== 'gps')
+      .sort((a, b) => a.created_at - b.created_at);
+
+    // GPS: batch processing
+    if (gpsItems.length > 0) {
+      const gpsResult = await processGpsBatch(gpsItems, get, set);
+      processed += gpsResult.processed;
+      succeeded += gpsResult.succeeded;
+      failed += gpsResult.failed;
+    }
+
+    // Other P3 (client_event etc): serial
+    for (const item of otherP3.slice(0, MAX_ITEMS_PER_CYCLE - processed)) {
+      const result = await processOneItem(item, get, set);
+      processed++;
+      if (result) succeeded++;
+      else failed++;
+    }
+
+    // ── End of cycle ──
+    const cycleEnd = Date.now();
+    const metrics: CycleMetrics = {
+      cycle_start: cycleStart,
+      cycle_end: cycleEnd,
+      cycle_duration_ms: cycleEnd - cycleStart,
+      items_processed: processed,
+      items_succeeded: succeeded,
+      items_failed: failed,
+      items_by_priority: {
+        1: orderedP1.length,
+        2: orderedP2.length,
+        3: gpsItems.length + otherP3.length,
+      },
+    };
+
+    set({ isSyncing: false, lastSyncAt: cycleEnd, lastCycleMetrics: metrics });
     get().persistQueue();
+
+    logInfo('sync', 'cycle_complete', {
+      duration_ms: metrics.cycle_duration_ms,
+      processed,
+      succeeded,
+      failed,
+      p1: orderedP1.length,
+      p2: orderedP2.length,
+      p3_gps: gpsItems.length,
+      p3_other: otherP3.length,
+    });
+
+    // Photo janitor (fire-and-forget, unchanged from V1)
+    if (PHOTO_JANITOR_ENABLED) {
+      try {
+        const referenced = new Set<string>();
+        for (const i of get().queue) {
+          if (i.type === 'photo' && i.status !== 'done') {
+            const uri = i.payload?.localUri as string | undefined;
+            if (uri) referenced.add(uri);
+          }
+        }
+        cleanupOrphanPhotos(referenced).catch(() => {});
+      } catch {}
+    }
+  },
+
+  // ═══ Diagnostics helpers ═══
+
+  getQueueSummary: (): QueueSummary => {
+    const queue = get().queue;
+    const byType: Record<string, number> = {};
+    for (const item of queue) {
+      byType[item.type] = (byType[item.type] || 0) + 1;
+    }
+    const pendingItems = queue.filter((i) => i.status === 'pending');
+    const oldest = pendingItems.length > 0
+      ? Date.now() - Math.min(...pendingItems.map((i) => i.created_at))
+      : null;
+
+    return {
+      total: queue.length,
+      pending: queue.filter((i) => i.status === 'pending').length,
+      syncing: queue.filter((i) => i.status === 'syncing').length,
+      done: queue.filter((i) => i.status === 'done').length,
+      error: queue.filter((i) => i.status === 'error').length,
+      dead: queue.filter((i) => i.status === 'dead').length,
+      by_type: byType,
+      oldest_pending_age_ms: oldest,
+    };
+  },
+
+  countByType: (type) => {
+    return get().queue.filter((i) => i.type === type && i.status !== 'done').length;
   },
 }));
 
-// ═══ Operation dispatcher ═══
+// ═══ Individual item processor ═══
+
+async function processOneItem(
+  item: SyncQueueItem,
+  get: () => SyncState,
+  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
+): Promise<boolean> {
+  // Mark as syncing
+  const updatedQueue = get().queue.map((i) =>
+    i.id === item.id ? { ...i, status: 'syncing' as SyncItemStatus } : i
+  );
+  set({ queue: updatedQueue });
+
+  try {
+    // Sale duplicate check (legacy ±5min — KEPT until B.3)
+    if (item.type === 'sale_order') {
+      const isDuplicate = await checkSaleDuplicate(item);
+      if (isDuplicate) {
+        get().markDone(item.id);
+        logInfo('sync', 'duplicate_skipped', { id: item.id, type: item.type });
+        return true;
+      }
+    }
+
+    await processSyncItem(item);
+    get().markDone(item.id);
+
+    // Photo cleanup post-sync
+    if (item.type === 'photo' && PHOTO_DELETE_ON_SYNC_ENABLED) {
+      const localUri = item.payload?.localUri as string | undefined;
+      if (localUri) {
+        deletePhoto(localUri)
+          .then(() => { photoCounters.deletedPostSyncTotal += 1; })
+          .catch(() => { photoCounters.deletePostSyncErrors += 1; });
+      }
+    }
+
+    return true;
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : 'Sync error';
+    const newRetries = item.retries + 1;
+
+    if (newRetries >= MAX_RETRIES) {
+      get().markDead(item.id, msg);
+      rollbackFailedOperation(item);
+      logError('sync', 'item_dead_rollback', {
+        id: item.id, type: item.type, retries: newRetries, error: msg,
+      });
+    } else {
+      get().markError(item.id, msg);
+    }
+
+    return false;
+  }
+}
+
+// ═══ GPS Batch Processor ═══
+
+async function processGpsBatch(
+  items: SyncQueueItem[],
+  get: () => SyncState,
+  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
+): Promise<{ processed: number; succeeded: number; failed: number }> {
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+
+  // Chunk into batches of GPS_BATCH_SIZE
+  const chunks = chunkArray(items, GPS_BATCH_SIZE);
+
+  for (const chunk of chunks) {
+    // Mark all as syncing
+    const ids = new Set(chunk.map((i) => i.id));
+    const updatedQueue = get().queue.map((i) =>
+      ids.has(i.id) ? { ...i, status: 'syncing' as SyncItemStatus } : i
+    );
+    set({ queue: updatedQueue });
+
+    // Try batch endpoint first, fallback to concurrent individual calls
+    let batchSuccess = false;
+    try {
+      batchSuccess = await tryGpsBatchCreate(chunk);
+    } catch (e: unknown) {
+      // If batch endpoint returns 404 or similar, try fallback
+      const errMsg = e instanceof Error ? e.message : '';
+      if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('Not Found')) {
+        logInfo('sync', 'gps_batch_fallback', { reason: 'endpoint_not_found', count: chunk.length });
+        batchSuccess = false;
+      } else {
+        // Real error — mark all as error
+        for (const item of chunk) {
+          handleGpsItemError(item, errMsg, get, set);
+          failed++;
+        }
+        processed += chunk.length;
+        continue;
+      }
+    }
+
+    if (batchSuccess) {
+      // All succeeded
+      for (const item of chunk) {
+        get().markDone(item.id);
+        succeeded++;
+      }
+      processed += chunk.length;
+    } else {
+      // Fallback: concurrent individual calls (GPS_CONCURRENCY at a time)
+      const fallbackResult = await processGpsConcurrent(chunk, get, set);
+      processed += fallbackResult.processed;
+      succeeded += fallbackResult.succeeded;
+      failed += fallbackResult.failed;
+    }
+  }
+
+  if (processed > 0) {
+    logInfo('sync', 'gps_batch_complete', { processed, succeeded, failed });
+  }
+
+  return { processed, succeeded, failed };
+}
+
+/** Try the batch_create endpoint. Returns true if all succeeded. Throws on error. */
+async function tryGpsBatchCreate(items: SyncQueueItem[]): Promise<boolean> {
+  const records = items.map((i) => ({
+    employee_id: i.payload.employee_id,
+    latitude: i.payload.latitude,
+    longitude: i.payload.longitude,
+    accuracy: i.payload.accuracy,
+    timestamp: i.payload.timestamp,
+  }));
+
+  await postRpc('/api/create_update', {
+    model: 'os.employee.gps.history',
+    method: 'batch_create',
+    records,
+  });
+
+  return true;
+}
+
+/** Fallback: process GPS items concurrently in groups of GPS_CONCURRENCY. */
+async function processGpsConcurrent(
+  items: SyncQueueItem[],
+  get: () => SyncState,
+  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
+): Promise<{ processed: number; succeeded: number; failed: number }> {
+  let succeeded = 0;
+  let failed = 0;
+
+  const concurrentChunks = chunkArray(items, GPS_CONCURRENCY);
+  for (const chunk of concurrentChunks) {
+    const results = await Promise.allSettled(
+      chunk.map((item) =>
+        postRpc('/api/create_update', {
+          model: 'os.employee.gps.history',
+          method: 'create',
+          dict: {
+            employee_id: item.payload.employee_id,
+            latitude: item.payload.latitude,
+            longitude: item.payload.longitude,
+          },
+        }).then(() => item.id)
+      )
+    );
+
+    for (let idx = 0; idx < results.length; idx++) {
+      const result = results[idx];
+      if (result.status === 'fulfilled') {
+        get().markDone(result.value);
+        succeeded++;
+      } else {
+        const errMsg = result.reason instanceof Error ? result.reason.message : 'GPS sync error';
+        handleGpsItemError(chunk[idx], errMsg, get, set);
+        failed++;
+      }
+    }
+  }
+
+  return { processed: items.length, succeeded, failed };
+}
+
+function handleGpsItemError(
+  item: SyncQueueItem,
+  message: string,
+  get: () => SyncState,
+  set: (partial: Partial<SyncState> | ((state: SyncState) => Partial<SyncState>)) => void,
+): void {
+  const newRetries = item.retries + 1;
+  if (newRetries >= MAX_RETRIES) {
+    get().markDead(item.id, message);
+    // GPS has no rollback — it's fire-and-forget telemetry
+  } else {
+    get().markError(item.id, message);
+  }
+}
+
+// ═══ DAG resolver (preserved from V1 BLD-010, unchanged logic) ═══
+
+export function computeProcessingOrder(
+  fullQueue: SyncQueueItem[],
+  candidates: SyncQueueItem[],
+): SyncQueueItem[] {
+  const anyDeps = candidates.some((c) => c.dependsOn && c.dependsOn.length > 0);
+  if (!anyDeps) {
+    return [...candidates].sort((a, b) => a.created_at - b.created_at);
+  }
+
+  const byId = new Map<string, SyncQueueItem>();
+  for (const q of fullQueue) byId.set(q.id, q);
+
+  const isDependencySatisfied = (depId: string): boolean => {
+    const dep = byId.get(depId);
+    if (!dep) return true;
+    return dep.status === 'done';
+  };
+
+  const result: SyncQueueItem[] = [];
+  const remaining = [...candidates];
+  let guard = 0;
+  const MAX_PASSES = 50;
+
+  while (remaining.length > 0) {
+    guard += 1;
+    if (guard > MAX_PASSES) {
+      logWarn('sync', 'dag_fallback', { reason: 'max_passes_exceeded' });
+      return [...candidates].sort((a, b) => a.created_at - b.created_at);
+    }
+
+    const ready = remaining.filter((item) => {
+      const deps = item.dependsOn ?? [];
+      return deps.every(isDependencySatisfied);
+    });
+
+    if (ready.length === 0) break;
+
+    ready.sort((a, b) => a.created_at - b.created_at);
+    for (const item of ready) {
+      result.push(item);
+      byId.set(item.id, { ...item, status: 'done' });
+      const idx = remaining.indexOf(item);
+      if (idx >= 0) remaining.splice(idx, 1);
+    }
+  }
+
+  return result;
+}
+
+// ═══ Operation dispatcher (preserved from V1, extended for V2 types) ═══
 
 async function processSyncItem(item: SyncQueueItem): Promise<void> {
   const { type, payload } = item;
+  const meta = item.meta ?? null;
 
   switch (type) {
     case 'sale_order':
@@ -231,6 +733,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         payload.latitude as number,
         payload.longitude as number,
+        meta,
       );
       break;
 
@@ -239,6 +742,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         payload.latitude as number,
         payload.longitude as number,
+        meta,
       );
       break;
 
@@ -247,6 +751,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         (payload.reason_id as number) || 1,
         `No-venta: ${payload.reason_code || ''} ${payload.notes || ''}`.trim(),
+        meta,
       );
       break;
 
@@ -264,7 +769,6 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       break;
 
     case 'photo': {
-      // F7: Read base64 from file at sync time (not stored in queue)
       let base64 = payload.image_base64 as string;
       if (payload.localUri && !base64) {
         const fromFile = await readPhotoAsBase64(payload.localUri as string);
@@ -275,11 +779,13 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         base64,
         (payload.image_type as string) || 'visit',
+        meta,
       );
       break;
     }
 
     case 'gps':
+      // Individual GPS — used only when NOT processed via batch
       await postRpc('/api/create_update', {
         model: 'os.employee.gps.history',
         method: 'create',
@@ -301,32 +807,118 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       }
       break;
 
+    // V2 types — basic dispatchers. Payloads follow the same
+    // postRpc pattern. Backend contracts TBD per endpoint.
+    case 'refill':
+      await postRpc('/api/create_update', {
+        model: 'van.refill.request',
+        method: 'create',
+        dict: payload,
+      });
+      break;
+
+    case 'unload':
+      await postRpc('/api/create_update', {
+        model: 'van.unload',
+        method: 'create',
+        dict: payload,
+      });
+      break;
+
+    case 'collection':
+      await postRpc('/api/create_update', {
+        model: 'account.payment',
+        method: 'create',
+        dict: {
+          partner_id: payload.partner_id,
+          amount: payload.amount,
+          payment_type: 'inbound',
+          journal_id: payload.journal_id || null,
+        },
+      });
+      break;
+
+    case 'transfer':
+      await postRpc('/api/create_update', {
+        model: 'stock.picking',
+        method: 'create',
+        dict: payload,
+      });
+      break;
+
+    case 'customer_create':
+    case 'customer_update':
+      await postRpc('/api/create_update', {
+        model: 'res.partner',
+        method: type === 'customer_create' ? 'create' : 'write',
+        dict: payload,
+      });
+      break;
+
     default:
-      console.warn(`[sync] Unknown operation type: ${type}`);
+      logWarn('sync', 'unknown_type', { type });
   }
 }
 
-// ═══ V1.2.1: Rollback failed operations ═══
+// ═══ Rollback V2 — sale_order + unload + refill ═══
 
 function rollbackFailedOperation(item: SyncQueueItem): void {
-  if (item.type === 'sale_order') {
-    // Revert local inventory deduction
-    const lines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
-    if (lines && lines.length > 0) {
-      const updateLocalStock = useProductStore.getState().updateLocalStock;
-      lines.forEach((line) => {
-        updateLocalStock(line.product_id, line.qty); // Add back
-      });
-      console.warn(
-        `[sync] ROLLBACK: restored ${lines.length} product lines to local inventory ` +
-        `for failed sale ${item.id}`
-      );
+  const updateLocalStock = useProductStore.getState().updateLocalStock;
+
+  switch (item.type) {
+    case 'sale_order': {
+      // Restore local stock for every line (add back deducted qty)
+      const lines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
+      if (lines && lines.length > 0) {
+        lines.forEach((line) => {
+          updateLocalStock(line.product_id, line.qty); // positive = restore
+        });
+        logError('sync', 'rollback_sale', {
+          id: item.id,
+          lines_restored: lines.length,
+          products: lines.map((l) => l.product_id),
+        });
+      }
+      break;
     }
+
+    case 'unload': {
+      // V2: Unload deducts stock locally. On failure, restore it.
+      const unloadLines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
+      if (unloadLines && unloadLines.length > 0) {
+        unloadLines.forEach((line) => {
+          updateLocalStock(line.product_id, line.qty); // positive = restore
+        });
+        logError('sync', 'rollback_unload', {
+          id: item.id,
+          lines_restored: unloadLines.length,
+        });
+      }
+      break;
+    }
+
+    case 'refill': {
+      // V2: Refill ADDS stock locally. On failure, REMOVE it.
+      const refillLines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
+      if (refillLines && refillLines.length > 0) {
+        refillLines.forEach((line) => {
+          updateLocalStock(line.product_id, -line.qty); // negative = remove added stock
+        });
+        logError('sync', 'rollback_refill', {
+          id: item.id,
+          lines_reversed: refillLines.length,
+        });
+      }
+      break;
+    }
+
+    // GPS, photo, client_event: no rollback needed (fire-and-forget telemetry)
+    default:
+      break;
   }
-  // Other types don't have local side effects that need rollback
 }
 
-// ═══ V1.2.1: Pre-sync duplicate check for sales ═══
+// ═══ Legacy ±5min sale duplicate check (KEPT until B.3 server-side idempotency) ═══
 
 async function checkSaleDuplicate(item: SyncQueueItem): Promise<boolean> {
   if (item.type !== 'sale_order') return false;
@@ -347,10 +939,11 @@ async function checkSaleDuplicate(item: SyncQueueItem): Promise<boolean> {
     });
 
     if (existing && existing.length > 0) {
-      console.warn(
-        `[sync] DUPLICATE detected: sale.order ${existing[0].name} already exists ` +
-        `for operation ${opId}. Skipping.`
-      );
+      logWarn('sync', 'legacy_dedup_hit', {
+        id: item.id,
+        existing_order: existing[0].name,
+        opId,
+      });
       return true;
     }
   } catch {
@@ -359,4 +952,14 @@ async function checkSaleDuplicate(item: SyncQueueItem): Promise<boolean> {
   }
 
   return false;
+}
+
+// ═══ Utility ═══
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
 }

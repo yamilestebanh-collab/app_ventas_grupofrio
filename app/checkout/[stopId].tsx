@@ -1,6 +1,6 @@
 /**
  * Checkout screen — s-checkout in mockup (lines 679-787).
- * Visit summary, WhatsApp previews, next stop navigation.
+ * Visit summary, next stop navigation. V2: WhatsApp previews removed.
  */
 
 import React from 'react';
@@ -19,6 +19,7 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatElapsed, formatCurrency } from '../../src/utils/time';
 import { checkOut } from '../../src/services/gfLogistics';
 import { useLocationStore } from '../../src/stores/useLocationStore';
+import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 
 export default function CheckoutScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -37,7 +38,6 @@ export default function CheckoutScreen() {
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
 
-  const [sendMessages, setSendMessages] = React.useState(true);
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
   const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
 
@@ -85,6 +85,10 @@ export default function CheckoutScreen() {
         timestamp: Date.now(),
       });
     }
+
+    // V2: Capture checkout GPS point and resume transit tracking
+    captureAndEnqueueGpsPoint('checkout').catch(() => {});
+    setGpsMode('in_transit');
 
     // Update stop state
     updateStopState(stop!.id, 'done');
@@ -144,76 +148,6 @@ export default function CheckoutScreen() {
             />
           </View>
         </Card>
-
-        {/* WhatsApp messages */}
-        {total > 0 && (
-          <>
-            <Text style={styles.sectionTitle}>
-              📲 Mensajes automaticos a {stop.customer_name}
-            </Text>
-
-            {/* WA 1: Ticket digital */}
-            <View style={[styles.waCard, styles.waGreen]}>
-              <View style={styles.waHeader}>
-                <Text style={{ fontSize: 18 }}>🧾</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.waTitle, { color: colors.success }]}>
-                    Ticket digital via WhatsApp
-                  </Text>
-                  <Text style={styles.waSub}>W21 · Se envia automaticamente</Text>
-                </View>
-                <Badge label="✓ Listo" variant="green" />
-              </View>
-              <View style={styles.waPreview}>
-                <Text style={styles.waPreviewText}>
-                  "🧊 KOLD · Grupo Frio{'\n'}
-                  Ticket de venta #{'\n'}
-                  Total: {formatCurrency(total)} MXN"
-                </Text>
-              </View>
-            </View>
-
-            {/* WA 2: Próxima visita */}
-            <View style={[styles.waCard, styles.waCyan]}>
-              <View style={styles.waHeader}>
-                <Text style={{ fontSize: 18 }}>📅</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.waTitle, { color: colors.cyan }]}>
-                    Proxima visita
-                  </Text>
-                  <Text style={styles.waSub}>Se envia al confirmar check-out</Text>
-                </View>
-                <Badge label="Nuevo" variant="cyan" />
-              </View>
-            </View>
-
-            {/* WA 3: Rating */}
-            <View style={[styles.waCard, styles.waYellow]}>
-              <View style={styles.waHeader}>
-                <Text style={{ fontSize: 18 }}>⭐</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.waTitle, { color: colors.warning }]}>
-                    Calificacion de servicio
-                  </Text>
-                  <Text style={styles.waSub}>30 min despues de entrega</Text>
-                </View>
-                <Badge label="Nuevo" variant="yellow" />
-              </View>
-            </View>
-
-            {/* Send toggle */}
-            <View style={styles.toggleRow}>
-              <Switch
-                value={sendMessages}
-                onValueChange={setSendMessages}
-                trackColor={{ true: colors.primary }}
-              />
-              <Text style={styles.toggleLabel}>
-                Enviar los 3 mensajes al cliente
-              </Text>
-            </View>
-          </>
-        )}
 
         {/* Next stop */}
         {nextStop && (
@@ -300,28 +234,6 @@ const styles = StyleSheet.create({
     fontSize: 12, fontWeight: '700', textTransform: 'uppercase',
     letterSpacing: 0.7, color: colors.textDim, marginTop: 16, marginBottom: 8,
   },
-  // WhatsApp cards
-  waCard: {
-    borderRadius: radii.card, padding: 12, paddingHorizontal: 14,
-    marginBottom: 8, borderWidth: 1,
-  },
-  waGreen: {
-    backgroundColor: 'rgba(34,197,94,0.03)', borderColor: 'rgba(34,197,94,0.2)',
-  },
-  waCyan: {
-    backgroundColor: 'rgba(6,182,212,0.03)', borderColor: 'rgba(6,182,212,0.2)',
-  },
-  waYellow: {
-    backgroundColor: 'rgba(245,158,11,0.03)', borderColor: 'rgba(245,158,11,0.2)',
-  },
-  waHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  waTitle: { fontSize: 12, fontWeight: '700' },
-  waSub: { fontSize: 10, color: colors.textDim },
-  waPreview: {
-    backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 8,
-    padding: 10, paddingHorizontal: 12, marginTop: 8,
-  },
-  waPreviewText: { fontSize: 11, color: colors.textDim, fontStyle: 'italic', lineHeight: 16 },
   // Toggle
   toggleRow: {
     flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6,
@@ -329,8 +241,8 @@ const styles = StyleSheet.create({
   toggleLabel: { fontSize: 12, color: colors.textDim },
   // Next stop
   nextStopCard: {
-    borderWidth: 1, borderColor: 'rgba(255,107,53,0.2)',
-    backgroundColor: 'rgba(255,107,53,0.04)',
+    borderWidth: 1, borderColor: 'rgba(37,99,235,0.2)',
+    backgroundColor: 'rgba(37,99,235,0.04)',
   },
   nextStopIcon: {
     width: 40, height: 40, borderRadius: 20,

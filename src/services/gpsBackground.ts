@@ -80,7 +80,7 @@ export async function startBackgroundTracking(): Promise<boolean> {
       foregroundService: {
         notificationTitle: 'KOLD Field',
         notificationBody: 'Tracking de ruta activo',
-        notificationColor: '#FF6B35',
+        notificationColor: '#2563EB', // V2: blue branding
       },
     });
 

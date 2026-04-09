@@ -64,8 +64,10 @@ function fuzzyMatch(text: string, query: string): boolean {
 
 export function ProductPicker({ visible, onClose, existingProductIds, partnerId }: ProductPickerProps) {
   const products = useProductStore((s) => s.products);
+  const inventorySource = useProductStore((s) => s.inventorySource);
   const addSaleLine = useVisitStore((s) => s.addSaleLine);
   const forecasts = useKoldStore((s) => s.forecasts);
+  const isGlobalFallback = inventorySource === 'global_legacy';
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<CategoryKey>('all');
   const [quantities, setQuantities] = useState<Record<number, number>>({});
@@ -97,14 +99,15 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
       if (activeCategory !== 'all' && p.category !== activeCategory) return false;
       // Search filter
       if (!fuzzyMatch(p.name + ' ' + (p.default_code || ''), search)) return false;
-      // Don't hide out-of-stock — show them disabled
+      // Hide zero-stock unless global fallback (where stock is unreliable)
+      if (!isGlobalFallback && p.qty_display <= 0) return false;
       return true;
     }).sort((a, b) => {
       // Sort: recommended first, then in-stock, then alphabetical
       if (a.isRecommended && !b.isRecommended) return -1;
       if (!a.isRecommended && b.isRecommended) return 1;
-      if (a.qty_available > 0 && b.qty_available <= 0) return -1;
-      if (a.qty_available <= 0 && b.qty_available > 0) return 1;
+      if (a.qty_display > 0 && b.qty_display <= 0) return -1;
+      if (a.qty_display <= 0 && b.qty_display > 0) return 1;
       return a.name.localeCompare(b.name);
     });
   }, [enrichedProducts, activeCategory, search]);
@@ -118,16 +121,16 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     return counts;
   }, [enrichedProducts]);
 
-  const setQty = useCallback((productId: number, delta: number) => {
+  const setQty = useCallback((productId: number, delta: number, maxStock: number) => {
     setQuantities((prev) => {
       const current = prev[productId] || 1;
-      const next = Math.max(1, current + delta);
+      const next = Math.max(1, Math.min(maxStock, current + delta));
       return { ...prev, [productId]: next };
     });
   }, []);
 
   function handleSelect(product: TruckProduct & { category: CategoryKey }) {
-    if (product.qty_available <= 0) return;
+    if (product.qty_display <= 0) return;
     if (existingProductIds.includes(product.id)) return;
 
     const qty = quantities[product.id] || 1;
@@ -135,8 +138,8 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
       productId: product.id,
       productName: product.name,
       price: product.list_price,
-      qty: Math.min(qty, product.qty_available),
-      stock: product.qty_available,
+      qty: Math.min(qty, product.qty_display),
+      stock: product.qty_display,
       weight: product.weight || 5,
     };
     addSaleLine(line);
@@ -146,7 +149,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
   }
 
   function renderProduct({ item: p }: { item: TruckProduct & { category: CategoryKey; isRecommended: boolean; isAlreadyAdded: boolean } }) {
-    const outOfStock = p.qty_available <= 0;
+    const outOfStock = p.qty_display <= 0;
     const alreadyAdded = p.isAlreadyAdded;
     const disabled = outOfStock || alreadyAdded;
     const qty = quantities[p.id] || 1;
@@ -175,7 +178,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
               styles.productStock,
               outOfStock && styles.textOutOfStock,
             ]}>
-              {outOfStock ? 'Agotado' : `${p.qty_available} disp.`}
+              {outOfStock ? 'Agotado' : `${p.qty_display} disp.`}
             </Text>
             {(p.weight ?? 0) > 0 && (
               <>
@@ -191,14 +194,15 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           <View style={styles.qtySelector}>
             <TouchableOpacity
               style={styles.qtyBtn}
-              onPress={() => setQty(p.id, -1)}
+              onPress={() => setQty(p.id, -1, p.qty_display)}
             >
               <Text style={styles.qtyBtnText}>−</Text>
             </TouchableOpacity>
             <Text style={styles.qtyValue}>{qty}</Text>
             <TouchableOpacity
-              style={styles.qtyBtn}
-              onPress={() => setQty(p.id, 1)}
+              style={[styles.qtyBtn, qty >= p.qty_display && styles.qtyBtnDisabled]}
+              onPress={() => setQty(p.id, 1, p.qty_display)}
+              disabled={qty >= p.qty_display}
             >
               <Text style={styles.qtyBtnText}>+</Text>
             </TouchableOpacity>
@@ -208,7 +212,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     );
   }
 
-  const inStockCount = filtered.filter((p) => p.qty_available > 0 && !p.isAlreadyAdded).length;
+  const inStockCount = filtered.filter((p) => p.qty_display > 0 && !p.isAlreadyAdded).length;
   const recommendedCount = filtered.filter((p) => p.isRecommended).length;
 
   return (
@@ -221,6 +225,15 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
             <Text style={styles.closeBtn}>Cerrar</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Global fallback warning */}
+        {isGlobalFallback && (
+          <View style={styles.fallbackBanner}>
+            <Text style={styles.fallbackText}>
+              ⚠ Inventario global — stock puede no reflejar tu unidad
+            </Text>
+          </View>
+        )}
 
         {/* Search */}
         <View style={styles.searchContainer}>
@@ -342,12 +355,12 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
   },
   categoryTabActive: {
-    backgroundColor: 'rgba(255,107,53,0.15)',
-    borderColor: colors.primary,
+    backgroundColor: 'rgba(37,99,235,0.12)',
+    borderColor: '#2563EB',
   },
   categoryIcon: { fontSize: 14 },
   categoryLabel: { fontSize: 12, color: colors.textDim, fontWeight: '500' },
-  categoryLabelActive: { color: colors.primary },
+  categoryLabelActive: { color: '#2563EB' },
   categoryCount: { fontSize: 10, color: colors.textDim },
   infoBar: {
     paddingHorizontal: spacing.screenPadding, paddingVertical: 6,
@@ -386,6 +399,14 @@ const styles = StyleSheet.create({
     fontSize: 16, fontWeight: '700', color: colors.text,
     minWidth: 28, textAlign: 'center',
   },
+  qtyBtnDisabled: { opacity: 0.3 },
+  fallbackBanner: {
+    backgroundColor: colors.warningAlpha08,
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',
+    borderRadius: radii.button, marginHorizontal: spacing.screenPadding,
+    marginBottom: 8, padding: 8, alignItems: 'center',
+  },
+  fallbackText: { fontSize: 11, color: '#F59E0B', fontWeight: '600' },
   emptyCard: {
     backgroundColor: colors.card, borderRadius: radii.card,
     padding: 30, alignItems: 'center', marginTop: 20,

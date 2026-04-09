@@ -90,7 +90,7 @@ export default function RouteScreen() {
                   styles.card,
                   { borderLeftColor: stopStateColors[stop.state] || colors.textDim },
                   isDone && { opacity: 0.65 },
-                  stop.state === 'in_progress' && { backgroundColor: 'rgba(255,107,53,0.03)' },
+                  stop.state === 'in_progress' && { backgroundColor: 'rgba(37,99,235,0.03)' },
                 ]}
                 onPress={() => router.push(`/stop/${stop.id}` as never)}
                 activeOpacity={0.7}

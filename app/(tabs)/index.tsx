@@ -248,7 +248,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: radii.button,
     marginBottom: 14,
-    backgroundColor: 'rgba(255,107,53,0.04)',
+    backgroundColor: 'rgba(37,99,235,0.04)',
   },
   weatherTemp: {
     fontFamily: fonts.monoBold,

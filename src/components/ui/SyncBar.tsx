@@ -59,7 +59,7 @@ const styles = StyleSheet.create({
   syncing: {
     backgroundColor: colors.primaryAlpha08,
     borderWidth: 1,
-    borderColor: 'rgba(255,107,53,0.15)',
+    borderColor: 'rgba(37,99,235,0.15)',
   },
   text: {
     fontSize: 11,

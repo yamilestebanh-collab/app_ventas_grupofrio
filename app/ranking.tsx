@@ -208,7 +208,7 @@ const styles = StyleSheet.create({
   mySummary: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     paddingVertical: 14,
-    backgroundColor: 'rgba(255,107,53,0.08)',
+    backgroundColor: 'rgba(37,99,235,0.08)',
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   myLabel: { ...typography.dimSmall },
@@ -231,7 +231,7 @@ const styles = StyleSheet.create({
   },
   entryRowMe: {
     borderWidth: 1, borderColor: colors.primary,
-    backgroundColor: 'rgba(255,107,53,0.05)',
+    backgroundColor: 'rgba(37,99,235,0.05)',
   },
   positionCol: { width: 36, alignItems: 'center' },
   medal: { fontSize: 22 },
