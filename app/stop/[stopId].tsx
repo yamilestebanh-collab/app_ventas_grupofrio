@@ -9,7 +9,7 @@
  * 2. KoldScore category
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -20,18 +20,22 @@ import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
 import { ScoreCard } from '../../src/components/domain/ScoreCard';
 import { ForecastCard } from '../../src/components/domain/ForecastCard';
+import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useKoldStore } from '../../src/stores/useKoldStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
+import { useVisitStore } from '../../src/stores/useVisitStore';
 
 export default function StopDetailScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
   const stop = stops.find((s) => s.id === Number(stopId));
+  const [catalogVisible, setCatalogVisible] = useState(false);
+  const saleLines = useVisitStore((s) => s.saleLines);
 
   // F7: Set geo-fence target for this customer
   const setTarget = useLocationStore((s) => s.setTarget);
@@ -151,7 +155,7 @@ export default function StopDetailScreen() {
             <Button
               label="📖 Catalogo"
               variant="secondary"
-              onPress={() => Alert.alert('Catalogo', 'Abre KoldWorld')}
+              onPress={() => setCatalogVisible(true)}
               style={{ flex: 1 }}
             />
           </View>
@@ -165,6 +169,14 @@ export default function StopDetailScreen() {
           </Card>
         )}
       </ScrollView>
+
+      {/* BLD-20260409: Catálogo opens the ProductPicker for browsing/pre-adding */}
+      <ProductPicker
+        visible={catalogVisible}
+        onClose={() => setCatalogVisible(false)}
+        existingProductIds={saleLines.map((l) => l.productId)}
+        partnerId={stop.customer_id}
+      />
     </SafeAreaView>
   );
 }

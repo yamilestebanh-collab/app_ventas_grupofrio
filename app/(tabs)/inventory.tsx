@@ -15,6 +15,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
+import { formatPriceWithIVA } from '../../src/utils/time';
 
 export default function InventoryScreen() {
   const router = useRouter();
@@ -112,9 +113,14 @@ export default function InventoryScreen() {
                   {p.name.includes('Hielo') || p.name.includes('Barra') ? '🧊 ' : '🥤 '}
                   {p.name}
                 </Text>
-                <Text style={styles.productQty}>
-                  {p.qty_available} × {p._totalKg.toFixed(0)}kg
-                </Text>
+                <View style={styles.productRight}>
+                  <Text style={styles.productPrice}>
+                    {formatPriceWithIVA(p.list_price)}
+                  </Text>
+                  <Text style={styles.productQty}>
+                    {p.qty_display} disp. · {p._totalKg.toFixed(0)}kg
+                  </Text>
+                </View>
               </View>
             ))
         )}
@@ -178,8 +184,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
   },
   productName: { flex: 1, fontSize: 13, color: colors.text, marginRight: 8 },
+  productRight: { alignItems: 'flex-end' },
+  productPrice: {
+    fontFamily: fonts.monoBold, fontSize: 13, fontWeight: '700', color: colors.primary,
+  },
   productQty: {
-    fontFamily: fonts.monoBold, fontSize: 12, fontWeight: '700', color: colors.text,
+    fontFamily: fonts.monoBold, fontSize: 11, fontWeight: '500', color: colors.textDim,
+    marginTop: 1,
   },
   // Actions
   actionRow: { flexDirection: 'row', gap: 6, marginTop: 10, marginBottom: 8 },
