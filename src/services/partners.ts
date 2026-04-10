@@ -20,7 +20,7 @@
  * for future sales.
  */
 
-import { odooRead, odooWrite } from './odooRpc';
+import { odooRead, odooRpc, odooWrite } from './odooRpc';
 
 export interface PartnerSearchResult {
   id: number;
@@ -102,17 +102,20 @@ export async function searchPartners(
     `  domain=${JSON.stringify(domain)}`,
   );
 
+  // ── Attempt 1: /get_records (existing path) ──
+  // Some GF backends whitelist res.partner here; some don't.
+  let results: PartnerSearchResult[] = [];
   try {
-    const results = await odooRead<PartnerSearchResult>(
+    const r = await odooRead<PartnerSearchResult>(
       'res.partner',
       domain,
       SEARCH_FIELDS,
       limit,
     );
-
+    results = r || [];
     console.log(
-      `[partners.search] ✓ got ${results?.length ?? 0} result(s) for mode=${mode}` +
-      (results && results.length > 0
+      `[partners.search] /get_records → ${results.length} result(s)` +
+      (results.length > 0
         ? ` — first: ${JSON.stringify({
             id: results[0].id,
             name: results[0].name,
@@ -120,12 +123,94 @@ export async function searchPartners(
           })}`
         : ''),
     );
-
-    return results || [];
   } catch (err) {
-    console.warn(`[partners.search] FAILED mode=${mode} q="${q}":`, err);
-    return [];
+    console.warn(`[partners.search] /get_records FAILED mode=${mode} q="${q}":`, err);
   }
+
+  if (results.length > 0) return results;
+
+  // ── Attempt 2: JSON-RPC search_read fallback ──
+  //
+  // BLD-20260410-FALLBACK: pricelist.ts already proves that
+  // odooRpc('res.partner', 'search_read', ...) works in production even
+  // when /get_records returns empty (the legacy endpoint has a custom
+  // allowlist / can't resolve property/computed fields). We retry the
+  // same query via the native ORM path before giving up.
+  try {
+    const fallback = await odooRpc<PartnerSearchResult[]>(
+      'res.partner',
+      'search_read',
+      [domain],
+      {
+        fields: SEARCH_FIELDS,
+        limit,
+      },
+    );
+    const list = Array.isArray(fallback) ? fallback : [];
+    console.log(
+      `[partners.search] /jsonrpc search_read → ${list.length} result(s)` +
+      (list.length > 0
+        ? ` — first: ${JSON.stringify({
+            id: list[0].id,
+            name: list[0].name,
+            customer_rank: list[0].customer_rank,
+          })}`
+        : ''),
+    );
+    if (list.length > 0) return list;
+  } catch (err) {
+    console.warn(`[partners.search] /jsonrpc search_read FAILED mode=${mode} q="${q}":`, err);
+  }
+
+  // ── Attempt 3: relax the customer_rank filter ──
+  //
+  // Last-resort: if mode='customers' or mode='leads' returns zero, try the
+  // same text query WITHOUT the customer_rank filter. customer_rank is a
+  // computed field and some Odoo setups cannot filter by it from an
+  // external endpoint; we still want the vendor to be able to find the
+  // contact even if the classification has to happen client-side.
+  if (mode !== 'all') {
+    try {
+      const relaxed = await odooRpc<PartnerSearchResult[]>(
+        'res.partner',
+        'search_read',
+        [
+          [
+            '|', '|', '|',
+            ['name', 'ilike', q],
+            ['phone', 'ilike', q],
+            ['mobile', 'ilike', q],
+            ['vat', 'ilike', q],
+          ],
+        ],
+        {
+          fields: SEARCH_FIELDS,
+          limit,
+        },
+      );
+      const list = Array.isArray(relaxed) ? relaxed : [];
+      console.log(
+        `[partners.search] relaxed search_read → ${list.length} result(s)`,
+      );
+      if (list.length > 0) {
+        // Filter client-side by customer_rank to honor the requested mode.
+        const wantLeads = mode === 'leads';
+        const filtered = list.filter((p) => {
+          const rank = p.customer_rank ?? 0;
+          return wantLeads ? rank === 0 : rank > 0;
+        });
+        console.log(
+          `[partners.search] relaxed → client-filtered to ${filtered.length} for mode=${mode}`,
+        );
+        return filtered;
+      }
+    } catch (err) {
+      console.warn(`[partners.search] relaxed search_read FAILED mode=${mode}:`, err);
+    }
+  }
+
+  console.log(`[partners.search] ALL PATHS EXHAUSTED — returning empty for mode=${mode} q="${q}"`);
+  return [];
 }
 
 /**
