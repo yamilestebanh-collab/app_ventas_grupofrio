@@ -1,14 +1,17 @@
 /**
- * BLD-20260408-P0: Off-route sale screen.
- * Allows searching for customers not in today's plan and initiating a sale.
+ * BLD-20260408-P0 / BLD-20260410: Off-route / lead / new customer entry screen.
  *
- * Flow:
- * 1. Driver searches for customer by name
- * 2. Selects customer from results
- * 3. Virtual stop is created in route store
- * 4. Navigates to standard sale screen with virtualStopId
+ * Three modes:
+ *   - "Cliente"   → search res.partner where customer_rank > 0
+ *   - "Lead"      → search res.partner where customer_rank = 0 (prospects)
+ *   - "Nuevo"     → navigate to /newcustomer form
  *
- * Uses odooRead to search res.partner.
+ * On selection:
+ *   - Customer: create virtual stop, startVisit, go straight to /sale
+ *   - Lead: create virtual stop flagged as lead, go to /sale; the sale
+ *           screen will force data completion before confirm.
+ *
+ * All search is online-only (uses odooRead under the hood).
  */
 
 import React, { useState, useCallback } from 'react';
@@ -21,32 +24,22 @@ import { useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography } from '../src/theme/typography';
-import { odooRead } from '../src/services/odooRpc';
+import { searchPartners, PartnerSearchResult, PartnerSearchMode } from '../src/services/partners';
 import { useRouteStore } from '../src/stores/useRouteStore';
-import { useAuthStore } from '../src/stores/useAuthStore';
 import { useVisitStore } from '../src/stores/useVisitStore';
+import { useSyncStore } from '../src/stores/useSyncStore';
 
-interface CustomerResult {
-  id: number;
-  name: string;
-  street?: string;
-  city?: string;
-  phone?: string;
-  mobile?: string;
-  vat?: string;
-}
-
-const CUSTOMER_FIELDS = ['id', 'name', 'street', 'city', 'phone', 'mobile', 'vat'];
+type Mode = 'customers' | 'leads';
 
 export default function OffRouteScreen() {
   const router = useRouter();
+  const [mode, setMode] = useState<Mode>('customers');
   const [search, setSearch] = useState('');
-  const [results, setResults] = useState<CustomerResult[]>([]);
+  const [results, setResults] = useState<PartnerSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const addVirtualStop = useRouteStore((s) => s.addVirtualStop);
-  const customerIds = useAuthStore((s) => s.customerIds);
-  const allowFreeVisitsMode = useAuthStore((s) => s.allowFreeVisitsMode);
+  const isOnline = useSyncStore((s) => s.isOnline);
 
   const doSearch = useCallback(async () => {
     const q = search.trim();
@@ -54,39 +47,34 @@ export default function OffRouteScreen() {
       Alert.alert('Busqueda', 'Escribe al menos 3 caracteres');
       return;
     }
+    if (!isOnline) {
+      Alert.alert('Sin conexión', 'La búsqueda de clientes requiere conexión a internet.');
+      return;
+    }
 
     setIsSearching(true);
     setHasSearched(true);
     try {
-      // Search by name (ilike) — also try phone and vat
-      const domain: unknown[] = [
-        '&',
-        ['customer_rank', '>', 0],
-        '|', '|',
-        ['name', 'ilike', q],
-        ['phone', 'ilike', q],
-        ['vat', 'ilike', q],
-      ];
-
-      const customers = await odooRead<CustomerResult>(
-        'res.partner',
-        domain,
-        CUSTOMER_FIELDS,
-        30,
-      );
-
-      setResults(customers);
+      const mapped: PartnerSearchMode = mode === 'leads' ? 'leads' : 'customers';
+      const list = await searchPartners(q, mapped, 30);
+      setResults(list);
     } catch (error) {
       console.warn('[offroute] Search failed:', error);
-      Alert.alert('Error', 'No se pudo buscar clientes. Verifica tu conexion.');
+      Alert.alert('Error', 'No se pudo buscar. Verifica tu conexión.');
     } finally {
       setIsSearching(false);
     }
-  }, [search]);
+  }, [search, mode, isOnline]);
 
-  function handleSelect(customer: CustomerResult) {
-    // Create a virtual stop and navigate to the sale screen
-    const virtualStopId = addVirtualStop(customer.id, customer.name);
+  function handleSelect(partner: PartnerSearchResult) {
+    const isLead = mode === 'leads' || (partner.customer_rank ?? 0) === 0;
+
+    // Create a virtual stop and mark its lead/offroute metadata.
+    const virtualStopId = addVirtualStop(partner.id, partner.name, {
+      is_lead: isLead,
+      is_offroute: true,
+      origin_lead_id: isLead ? partner.id : undefined,
+    });
 
     // Start a visit for this virtual stop
     const visitStore = useVisitStore.getState();
@@ -94,35 +82,49 @@ export default function OffRouteScreen() {
     visitStore.startVisit(
       {
         id: virtualStopId,
-        customer_id: customer.id,
-        customer_name: customer.name,
+        customer_id: partner.id,
+        customer_name: partner.name,
         state: 'in_progress',
         source_model: 'gf.route.stop',
+        is_lead: isLead,
+        is_offroute: true,
+        origin_lead_id: isLead ? partner.id : undefined,
+        customer_rank: partner.customer_rank,
       },
-      0, 0, // lat/lon — GPS will provide real values if available
+      0, 0,
     );
 
-    // Navigate to sale screen with virtualStopId
     router.push(`/sale/${virtualStopId}` as never);
   }
 
-  function renderCustomer({ item }: { item: CustomerResult }) {
+  function handleNewCustomer() {
+    router.push('/newcustomer' as never);
+  }
+
+  function renderPartner({ item }: { item: PartnerSearchResult }) {
+    const isLead = (item.customer_rank ?? 0) === 0;
     const subtitle = [item.street, item.city].filter(Boolean).join(', ');
     const contact = item.phone || item.mobile || '';
 
     return (
       <TouchableOpacity
-        style={styles.customerCard}
+        style={[styles.customerCard, isLead && styles.leadCard]}
         onPress={() => handleSelect(item)}
         activeOpacity={0.7}
       >
         <View style={{ flex: 1 }}>
-          <Text style={styles.customerName} numberOfLines={1}>{item.name}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={styles.customerName} numberOfLines={1}>{item.name}</Text>
+            {isLead && <Text style={styles.leadBadge}>LEAD</Text>}
+          </View>
           {subtitle ? (
             <Text style={styles.customerSubtitle} numberOfLines={1}>{subtitle}</Text>
           ) : null}
           {contact ? (
             <Text style={styles.customerContact}>{contact}</Text>
+          ) : null}
+          {item.vat ? (
+            <Text style={styles.customerContact}>RFC: {item.vat}</Text>
           ) : null}
         </View>
         <Text style={styles.selectArrow}>{'>'}</Text>
@@ -135,11 +137,33 @@ export default function OffRouteScreen() {
       <TopBar title="Venta Fuera de Ruta" showBack />
 
       <View style={styles.content}>
+        {/* Mode toggle */}
+        <View style={styles.modeRow}>
+          <TouchableOpacity
+            style={[styles.modeBtn, mode === 'customers' && styles.modeBtnActive]}
+            onPress={() => { setMode('customers'); setResults([]); setHasSearched(false); }}
+          >
+            <Text style={[styles.modeBtnText, mode === 'customers' && styles.modeBtnTextActive]}>
+              Cliente
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modeBtn, mode === 'leads' && styles.modeBtnActive]}
+            onPress={() => { setMode('leads'); setResults([]); setHasSearched(false); }}
+          >
+            <Text style={[styles.modeBtnText, mode === 'leads' && styles.modeBtnTextActive]}>
+              Lead / Prospecto
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Search bar */}
         <View style={styles.searchRow}>
           <TextInput
             style={styles.searchInput}
-            placeholder="Buscar cliente por nombre, telefono o RFC..."
+            placeholder={mode === 'leads'
+              ? 'Buscar lead por nombre, teléfono o RFC...'
+              : 'Buscar cliente por nombre, teléfono o RFC...'}
             placeholderTextColor={colors.textDim}
             value={search}
             onChangeText={setSearch}
@@ -159,10 +183,17 @@ export default function OffRouteScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Info */}
-        <Text style={styles.infoText}>
-          Busca un cliente que no este en tu ruta de hoy para registrar una venta.
-        </Text>
+        {/* New customer CTA */}
+        <TouchableOpacity style={styles.newCustomerCta} onPress={handleNewCustomer}>
+          <Text style={styles.newCustomerIcon}>＋</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.newCustomerTitle}>Dar de alta nuevo cliente</Text>
+            <Text style={styles.newCustomerHint}>
+              Si no existe todavía en el sistema
+            </Text>
+          </View>
+          <Text style={styles.selectArrow}>{'>'}</Text>
+        </TouchableOpacity>
 
         {/* Results */}
         {isSearching ? (
@@ -173,7 +204,7 @@ export default function OffRouteScreen() {
         ) : (
           <FlatList
             data={results}
-            renderItem={renderCustomer}
+            renderItem={renderPartner}
             keyExtractor={(c) => String(c.id)}
             contentContainerStyle={styles.list}
             ListEmptyComponent={
@@ -184,7 +215,7 @@ export default function OffRouteScreen() {
                     Sin resultados para "{search}"
                   </Text>
                   <Text style={[typography.dim, { fontSize: 11, marginTop: 4 }]}>
-                    Verifica el nombre o prueba con telefono/RFC
+                    Prueba con otro nombre o cambia a {mode === 'leads' ? 'Cliente' : 'Lead'}
                   </Text>
                 </View>
               ) : null
@@ -200,8 +231,35 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   content: { flex: 1, paddingHorizontal: spacing.screenPadding },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  // Mode toggle
+  modeRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  modeBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: radii.button,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  modeBtnActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  modeBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textDim,
+  },
+  modeBtnTextActive: { color: '#FFF' },
+  // Search
   searchRow: {
-    flexDirection: 'row', gap: 8, marginBottom: 8, marginTop: 4,
+    flexDirection: 'row', gap: 8, marginBottom: 10,
   },
   searchInput: {
     flex: 1,
@@ -214,10 +272,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18, justifyContent: 'center',
   },
   searchBtnText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
-  infoText: {
-    fontSize: 11, color: colors.textDim, marginBottom: 12,
-    lineHeight: 16,
+  // New customer CTA
+  newCustomerCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colors.cardLighter,
+    borderRadius: radii.card,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderStyle: 'dashed',
   },
+  newCustomerIcon: {
+    fontSize: 24,
+    color: colors.primary,
+    fontWeight: '700',
+    width: 28,
+    textAlign: 'center',
+  },
+  newCustomerTitle: { fontSize: 13, fontWeight: '700', color: colors.text },
+  newCustomerHint: { fontSize: 11, color: colors.textDim, marginTop: 2 },
+  // List
   list: { paddingBottom: 80 },
   customerCard: {
     flexDirection: 'row', alignItems: 'center',
@@ -225,7 +303,20 @@ const styles = StyleSheet.create({
     padding: 14, marginBottom: 8,
     borderLeftWidth: 3, borderLeftColor: colors.primary,
   },
+  leadCard: {
+    borderLeftColor: colors.warning,
+  },
   customerName: { fontSize: 14, fontWeight: '700', color: colors.text },
+  leadBadge: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.warning,
+    backgroundColor: 'rgba(245,158,11,0.15)',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+    letterSpacing: 0.4,
+  },
   customerSubtitle: { fontSize: 12, color: colors.textDim, marginTop: 2 },
   customerContact: { fontSize: 11, color: colors.primary, marginTop: 2 },
   selectArrow: { fontSize: 18, color: colors.textDim, marginLeft: 8 },

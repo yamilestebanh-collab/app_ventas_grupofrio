@@ -26,7 +26,13 @@ interface RouteState {
   // Actions
   loadPlan: () => Promise<void>;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
-  addVirtualStop: (customerId: number, customerName: string) => number;
+  addVirtualStop: (
+    customerId: number,
+    customerName: string,
+    meta?: { is_lead?: boolean; is_offroute?: boolean; origin_lead_id?: number },
+  ) => number;
+  /** BLD-20260410: Update the partner linked to a stop (used after lead→customer conversion). */
+  updateStopPartner: (stopId: number, newPartnerId: number, newPartnerName?: string) => void;
   reset: () => void;
 }
 
@@ -102,11 +108,12 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   },
 
   /**
-   * BLD-20260408-P0: Create a virtual stop for off-route sales.
+   * BLD-20260408-P0 / BLD-20260410: Create a virtual stop for off-route sales.
    * Uses negative IDs to distinguish from real backend stops.
-   * Returns the virtual stop ID for navigation.
+   * Metadata (is_lead, is_offroute, origin_lead_id) travels with the stop so
+   * the sale flow can branch (e.g. force data completion for leads).
    */
-  addVirtualStop: (customerId, customerName) => {
+  addVirtualStop: (customerId, customerName, meta) => {
     const virtualId = -(Date.now() % 1000000); // negative to avoid collision
     const virtualStop: GFStop = {
       id: virtualId,
@@ -115,10 +122,34 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       state: 'pending',
       source_model: 'gf.route.stop',
       route_sequence: 999,
+      is_offroute: meta?.is_offroute ?? true,
+      is_lead: meta?.is_lead ?? false,
+      origin_lead_id: meta?.origin_lead_id,
     };
     const stops = [...get().stops, virtualStop];
     set({ stops, stopsTotal: stops.length });
     return virtualId;
+  },
+
+  /**
+   * BLD-20260410: Update a stop's partner binding after a lead is converted
+   * into a real customer, or after a freshly-created partner gets its
+   * real Odoo ID. Persists the change so a reload keeps the new binding.
+   */
+  updateStopPartner: (stopId, newPartnerId, newPartnerName) => {
+    const stops = get().stops.map((s) =>
+      s.id === stopId
+        ? {
+            ...s,
+            customer_id: newPartnerId,
+            customer_name: newPartnerName ?? s.customer_name,
+            is_lead: false, // promoted
+            customer_rank: 1,
+          }
+        : s
+    );
+    set({ stops });
+    storeSave(STORAGE_KEYS.STOPS, stops);
   },
 
   updateStopState: (stopId, state) => {

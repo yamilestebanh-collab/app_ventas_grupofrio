@@ -711,22 +711,41 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
   const meta = item.meta ?? null;
 
   switch (type) {
-    case 'sale_order':
+    case 'sale_order': {
+      // BLD-20260410: Offroute sales ship partner_id only (no gf.route.stop).
+      // Virtual stops use negative IDs; never forward those to Odoo.
+      // Note field (kept in local queue for audit; only sent if backend supports it).
+      const rawStopId = payload.stop_id as number | null | undefined;
+      const validStopId = typeof rawStopId === 'number' && rawStopId > 0 ? rawStopId : null;
+      const isOffroute = !!payload.is_offroute || validStopId === null;
+
+      const auditBits: string[] = [];
+      if (isOffroute) auditBits.push('offroute');
+      if (payload.origin_lead_id) auditBits.push(`lead_origin=${payload.origin_lead_id}`);
+      if (payload.payment_method) auditBits.push(`pay=${payload.payment_method}`);
+      const noteLine = auditBits.length > 0
+        ? `[KOLD Field] ${auditBits.join(' · ')}`
+        : undefined;
+
+      const saleDict: Record<string, unknown> = {
+        partner_id: payload.partner_id,
+        order_line: (payload.lines as any[])?.map((l: any) => [
+          0, 0, {
+            product_id: l.product_id,
+            product_uom_qty: l.qty,
+            price_unit: l.price_unit,
+          },
+        ]) || [],
+      };
+      if (noteLine) saleDict.note = noteLine;
+
       await postRpc('/api/create_update', {
         model: 'sale.order',
         method: 'create',
-        dict: {
-          partner_id: payload.partner_id,
-          order_line: (payload.lines as any[])?.map((l: any) => [
-            0, 0, {
-              product_id: l.product_id,
-              product_uom_qty: l.qty,
-              price_unit: l.price_unit,
-            },
-          ]) || [],
-        },
+        dict: saleDict,
       });
       break;
+    }
 
     case 'checkin':
       await checkIn(

@@ -106,6 +106,11 @@ export default function CheckinScreen() {
     const lat = latitude || 0;
     const lon = longitude || 0;
 
+    // BLD-20260410: Offroute virtual stops have negative IDs and no
+    // backend gf.route.stop record. Skip the server checkin entirely;
+    // the visit starts locally and the sale flow handles the rest.
+    const isOffRoute = stop.id < 0;
+
     try {
       startVisit(stop, lat, lon);
       updateStopState(stop.id, 'in_progress');
@@ -116,7 +121,9 @@ export default function CheckinScreen() {
       // Capture a single GPS point tagged as check-in (fire-and-forget)
       captureAndEnqueueGpsPoint('checkin').catch(() => {});
 
-      if (isOnline) {
+      if (isOffRoute) {
+        // No server checkin for virtual stops.
+      } else if (isOnline) {
         await checkIn(stop.id, lat, lon);
       } else {
         enqueue('checkin', {
@@ -127,13 +134,16 @@ export default function CheckinScreen() {
         });
       }
     } catch {
-      // Server failed — enqueue for retry, keep visit started locally
-      enqueue('checkin', {
-        stop_id: stop.id,
-        latitude: lat,
-        longitude: lon,
-        timestamp: Date.now(),
-      });
+      // Server failed — enqueue for retry, keep visit started locally.
+      // Skip enqueue for offroute (no real stop_id to retry against).
+      if (!isOffRoute) {
+        enqueue('checkin', {
+          stop_id: stop.id,
+          latitude: lat,
+          longitude: lon,
+          timestamp: Date.now(),
+        });
+      }
       if (!checkedIn) {
         // Only reset lock if the visit didn't start (pre-startVisit failure)
         setCheckingIn(false);

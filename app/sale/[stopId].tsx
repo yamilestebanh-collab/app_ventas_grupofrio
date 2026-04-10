@@ -20,6 +20,7 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCurrency, formatPriceWithIVA } from '../../src/utils/time';
 import { takePhoto } from '../../src/services/camera';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
+import { LeadConversionModal } from '../../src/components/domain/LeadConversionModal';
 
 export default function SaleScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -27,6 +28,7 @@ export default function SaleScreen() {
   const stops = useRouteStore((s) => s.stops);
   const stop = stops.find((s) => s.id === Number(stopId));
   const updateStopState = useRouteStore((s) => s.updateStopState);
+  const updateStopPartner = useRouteStore((s) => s.updateStopPartner);
 
   const {
     saleLines, salePaymentMethod, salePhotoTaken,
@@ -38,6 +40,10 @@ export default function SaleScreen() {
   const isOnline = useSyncStore((s) => s.isOnline);
 
   const [pickerVisible, setPickerVisible] = React.useState(false);
+  const [leadModalVisible, setLeadModalVisible] = React.useState(false);
+  // BLD-20260410: Tracks whether this stop's lead has already been converted
+  // in this session (to avoid re-asking after a successful conversion).
+  const [leadConverted, setLeadConverted] = React.useState(false);
 
   if (!stop) {
     return (
@@ -63,6 +69,13 @@ export default function SaleScreen() {
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
                      && hasStock && !saleConfirmed;
 
+  // BLD-20260410: Detect if this stop is a lead that still needs conversion.
+  // A stop is a "pending lead" if is_lead is true OR customer_rank is 0
+  // AND it hasn't been converted in this session.
+  const stopIsLead = !!stop && !leadConverted && (
+    stop.is_lead === true || stop.customer_rank === 0
+  );
+
   async function handleConfirm() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
 
@@ -87,18 +100,34 @@ export default function SaleScreen() {
 
     if (!stop) return;
 
+    // BLD-20260410: If this is a lead, force conversion before the sale
+    // can be enqueued. The modal handles the partner write; on success
+    // onLeadConverted() is called and the user taps Confirmar again.
+    if (stopIsLead) {
+      if (!isOnline) {
+        Alert.alert(
+          'Sin conexión',
+          'Este contacto es un lead. Necesitas conexión para completar sus datos antes de cerrar la venta.',
+        );
+        return;
+      }
+      setLeadModalVisible(true);
+      return;
+    }
+
     // V1.2: Lock to prevent duplicate
     const operationId = lockSaleConfirm();
 
     // BLD-20260408-P0: Detect off-route sales (virtual stops have negative IDs)
-    const isOffRoute = stop.id < 0;
+    const isOffRoute = stop.id < 0 || !!stop.is_offroute;
 
-    // Create sale order payload with idempotency key
+    // Create sale order payload with idempotency key + audit metadata
     const payload = {
       _operationId: operationId,
       partner_id: stop.customer_id,
       stop_id: isOffRoute ? null : stop.id, // Don't send negative virtual IDs to backend
       is_offroute: isOffRoute,
+      origin_lead_id: stop.origin_lead_id ?? null,
       payment_method: salePaymentMethod,
       lines: saleLines.map((l) => ({
         product_id: l.productId,
@@ -125,6 +154,16 @@ export default function SaleScreen() {
     router.push(`/checkout/${stop.id}` as never);
   }
 
+  function handleLeadConverted() {
+    if (!stop) return;
+    // Promote the local stop so it's no longer treated as a lead.
+    updateStopPartner(stop.id, stop.customer_id, stop.customer_name);
+    setLeadConverted(true);
+    setLeadModalVisible(false);
+    // Auto-continue: immediately try the sale now that the lead is a customer.
+    setTimeout(() => { handleConfirm(); }, 50);
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="Nueva Venta" showBack />
@@ -132,6 +171,22 @@ export default function SaleScreen() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Customer + forecast hint */}
         <Text style={styles.customerName}>{stop.customer_name}</Text>
+        {stopIsLead && (
+          <View style={styles.leadBanner}>
+            <Text style={styles.leadBannerIcon}>⚠️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.leadBannerTitle}>Lead sin convertir</Text>
+              <Text style={styles.leadBannerText}>
+                Al confirmar la venta se pedirán los datos para convertirlo en cliente.
+              </Text>
+            </View>
+          </View>
+        )}
+        {stop.is_offroute && !stopIsLead && (
+          <View style={styles.offrouteBadge}>
+            <Text style={styles.offrouteBadgeText}>VENTA FUERA DE RUTA</Text>
+          </View>
+        )}
         {forecast && (
           <Text style={styles.forecastHint}>
             Sugerido KoldDemand: {forecast.predicted_kg.toFixed(0)} kg
@@ -296,6 +351,15 @@ export default function SaleScreen() {
           </Text>
         )}
       </ScrollView>
+
+      {/* BLD-20260410: Lead → customer conversion modal */}
+      <LeadConversionModal
+        visible={leadModalVisible}
+        partnerId={stop.customer_id}
+        initialName={stop.customer_name}
+        onClose={() => setLeadModalVisible(false)}
+        onConfirmed={handleLeadConverted}
+      />
     </SafeAreaView>
   );
 }
@@ -306,6 +370,43 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   customerName: { fontSize: 12, color: colors.textDim, marginBottom: 2 },
   forecastHint: { fontSize: 11, color: colors.primary, marginBottom: 14 },
+  // BLD-20260410: Lead + offroute visual cues
+  leadBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245,158,11,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.3)',
+    borderRadius: radii.button,
+    padding: 10,
+    marginBottom: 10,
+    gap: 8,
+  },
+  leadBannerIcon: { fontSize: 18 },
+  leadBannerTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.warning,
+  },
+  leadBannerText: {
+    fontSize: 11,
+    color: colors.warning,
+    lineHeight: 15,
+  },
+  offrouteBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(37,99,235,0.15)',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginBottom: 10,
+  },
+  offrouteBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.primary,
+    letterSpacing: 0.6,
+  },
   emptyProducts: {
     backgroundColor: colors.card,
     borderRadius: radii.card,

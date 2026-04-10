@@ -44,6 +44,19 @@ export interface GFStop {
   state: StopState;
   route_sequence?: number;
   source_model: 'gf.route.stop';
+
+  // BLD-20260410: Customer classification (from backend plan/stops).
+  // customer_rank > 0 = confirmed customer; 0 or missing = lead/prospect.
+  // When a stop is marked as lead, sale flow forces data completion.
+  customer_rank?: number;
+  is_lead?: boolean;
+
+  // BLD-20260410: Off-route / lead metadata (client-side, for audit).
+  // is_offroute = added via offroute screen (virtual stop).
+  // origin_lead_id = original lead ID when a lead was just converted.
+  is_offroute?: boolean;
+  origin_lead_id?: number;
+
   // Enriched client-side (not from API):
   _koldScore?: KoldScoreData | null;
   _koldForecast?: KoldForecastData | null;

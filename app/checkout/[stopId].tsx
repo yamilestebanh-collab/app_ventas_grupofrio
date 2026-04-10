@@ -66,8 +66,15 @@ export default function CheckoutScreen() {
     const lat = latitude || 0;
     const lon = longitude || 0;
 
+    // BLD-20260410: Offroute virtual stops have no backend gf.route.stop
+    // record. Skip the server checkout entirely — the sale order already
+    // carries the partner_id and is enough for the backend audit trail.
+    const isOffRoute = stop!.id < 0;
+
     try {
-      if (isOnline) {
+      if (isOffRoute) {
+        // No server checkout for virtual stops.
+      } else if (isOnline) {
         await checkOut(stop!.id, lat, lon);
       } else {
         enqueue('checkout', {
@@ -78,12 +85,14 @@ export default function CheckoutScreen() {
         });
       }
     } catch {
-      enqueue('checkout', {
-        stop_id: stop!.id,
-        latitude: lat,
-        longitude: lon,
-        timestamp: Date.now(),
-      });
+      if (!isOffRoute) {
+        enqueue('checkout', {
+          stop_id: stop!.id,
+          latitude: lat,
+          longitude: lon,
+          timestamp: Date.now(),
+        });
+      }
     }
 
     // V2: Capture checkout GPS point and resume transit tracking
