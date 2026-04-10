@@ -140,6 +140,77 @@ export async function uploadStopImage(
   return !!result;
 }
 
+// ═══ Lead conversion (BLD-20260410-BACKEND) ═══
+//
+// Sebastián expuso un endpoint dedicado:
+//   POST /gf/logistics/api/employee/lead/convert
+//   Body: { stop_id, lead_id?, updates: { name, phone, email, street, ...,
+//           vat, zip, l10n_mx_edi_fiscal_regime, l10n_mx_edi_usage, ... } }
+//   Respuesta: { ok, data: { partner_id, stop_id, lead_id, customer_rank } }
+//
+// Este flujo:
+//   1. toma el gf.route.stop con lead_id
+//   2. crea o actualiza res.partner con los datos capturados
+//   3. setea customer_id en el mismo stop (misma identidad, sin duplicar)
+//   4. conserva lead_id para el marcado "won" al cerrar plan
+//
+// Devuelve el partner_id nuevo o null si el backend rechaza el cambio.
+
+export interface LeadConvertUpdates {
+  name: string;
+  phone?: string;
+  mobile?: string;
+  email?: string;
+  street?: string;
+  street2?: string;
+  city?: string;
+  zip?: string;
+  vat?: string;
+  comment?: string;
+  // Fiscal MX
+  l10n_mx_edi_fiscal_regime?: string;
+  l10n_mx_edi_usage?: string;
+  // Custom x_kold_* pasa tal cual
+  [k: string]: unknown;
+}
+
+export interface LeadConvertResponse {
+  partner_id: number;
+  stop_id: number;
+  lead_id?: number;
+  customer_rank?: number;
+}
+
+export async function convertLeadStop(
+  stopId: number,
+  updates: LeadConvertUpdates,
+  leadId?: number,
+): Promise<LeadConvertResponse | null> {
+  try {
+    const body: Record<string, unknown> = {
+      stop_id: stopId,
+      updates,
+    };
+    if (leadId && leadId > 0) body.lead_id = leadId;
+
+    const result = await postRest<any>(`${GF_BASE}/lead/convert`, body);
+    if (!result || typeof result !== 'object') return null;
+    if (result.ok === false) {
+      console.warn('[gfLogistics] lead/convert returned ok=false:', result.message);
+      return null;
+    }
+    const data = result.data !== undefined ? result.data : result;
+    if (!data || typeof data.partner_id !== 'number') {
+      console.warn('[gfLogistics] lead/convert: unexpected shape', data);
+      return null;
+    }
+    return data as LeadConvertResponse;
+  } catch (error) {
+    console.warn('[gfLogistics] lead/convert failed:', error);
+    return null;
+  }
+}
+
 // ═══ Session ═══
 
 export async function signOut(): Promise<void> {

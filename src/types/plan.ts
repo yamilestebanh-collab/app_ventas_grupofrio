@@ -33,6 +33,17 @@ export type StopState =
   | 'rejected'
   | 'closed';
 
+/**
+ * BLD-20260410-BACKEND: gf.route.stop now supports mixed stops in the
+ * backend (see Sebastián's "Plan 2 — Route Leads Mixed Stops" changeset).
+ * A stop can be:
+ *   - 'customer' → bound to an existing res.partner (customer_id)
+ *   - 'lead'     → bound to a crm.lead (lead_id), no partner yet
+ * After a field conversion via /employee/lead/convert, the stop keeps
+ * lead_id AND gets customer_id populated in place (same stop identity).
+ */
+export type StopKind = 'customer' | 'lead';
+
 export interface GFStop {
   id: OdooId;
   customer_id: number;
@@ -45,9 +56,16 @@ export interface GFStop {
   route_sequence?: number;
   source_model: 'gf.route.stop';
 
-  // BLD-20260410: Customer classification (from backend plan/stops).
+  // BLD-20260410-BACKEND: canonical lead markers from backend plan/stops.
+  // stop_kind drives UI branches (lead conversion modal, sale result selector).
+  // lead_id is the original crm.lead record; preserved even after conversion
+  // so the server can mark the lead as "won" at plan close.
+  stop_kind?: StopKind;
+  lead_id?: number;
+
+  // BLD-20260410: Customer classification (legacy fallback).
   // customer_rank > 0 = confirmed customer; 0 or missing = lead/prospect.
-  // When a stop is marked as lead, sale flow forces data completion.
+  // New code should prefer stop_kind when available.
   customer_rank?: number;
   is_lead?: boolean;
 

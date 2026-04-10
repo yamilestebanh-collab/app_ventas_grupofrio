@@ -78,11 +78,20 @@ export default function SaleScreen() {
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
                      && hasStock && !saleConfirmed;
 
-  // BLD-20260410: Detect if this stop is a lead that still needs conversion.
-  // A stop is a "pending lead" if is_lead is true OR customer_rank is 0
-  // AND it hasn't been converted in this session.
+  // BLD-20260410-BACKEND: Detect if this stop is a lead that still needs
+  // conversion. Priority:
+  //   1. stop_kind === 'lead' (canonical, from backend Plan 2)
+  //   2. explicit lead_id without customer_id
+  //   3. legacy is_lead flag
+  //   4. legacy customer_rank=0 (prospect)
+  // After a successful conversion in the current session we force the
+  // stop to behave as a customer via leadConverted regardless of what
+  // the backend eventually returns on the next plan reload.
   const stopIsLead = !!stop && !leadConverted && (
-    stop.is_lead === true || stop.customer_rank === 0
+    stop.stop_kind === 'lead' ||
+    (stop.lead_id != null && stop.lead_id > 0 && !(stop.customer_id > 0)) ||
+    stop.is_lead === true ||
+    stop.customer_rank === 0
   );
 
   async function handleConfirm() {
@@ -137,7 +146,10 @@ export default function SaleScreen() {
       partner_id: stop.customer_id,
       stop_id: isOffRoute ? null : stop.id, // Don't send negative virtual IDs to backend
       is_offroute: isOffRoute,
-      origin_lead_id: stop.origin_lead_id ?? null,
+      // BLD-20260410-BACKEND: Prefer the canonical lead_id stored in the
+      // stop (set by plan/stops when stop_kind='lead'). Fall back to the
+      // client-only origin_lead_id for offroute virtual stops.
+      origin_lead_id: stop.lead_id ?? stop.origin_lead_id ?? null,
       lead_result: leadResult, // sale | muestra | consignacion (drives pricing)
       payment_method: salePaymentMethod,
       warehouse_id: warehouseId,
@@ -167,10 +179,12 @@ export default function SaleScreen() {
     router.push(`/checkout/${stop.id}` as never);
   }
 
-  function handleLeadConverted() {
+  function handleLeadConverted(newPartnerId: number) {
     if (!stop) return;
-    // Promote the local stop so it's no longer treated as a lead.
-    updateStopPartner(stop.id, stop.customer_id, stop.customer_name);
+    // BLD-20260410-BACKEND: The backend /lead/convert endpoint can return a
+    // fresh partner_id (the crm.lead just got promoted to a res.partner).
+    // Bind it to the stop so the upcoming sale uses the correct partner.
+    updateStopPartner(stop.id, newPartnerId, stop.customer_name);
     setLeadConverted(true);
     setLeadModalVisible(false);
     // Auto-continue: immediately try the sale now that the lead is a customer.
@@ -414,7 +428,9 @@ export default function SaleScreen() {
       {/* BLD-20260410: Lead → customer conversion modal */}
       <LeadConversionModal
         visible={leadModalVisible}
+        stopId={stop.id}
         partnerId={stop.customer_id}
+        leadId={stop.lead_id ?? stop.origin_lead_id}
         initialName={stop.customer_name}
         onClose={() => setLeadModalVisible(false)}
         onConfirmed={handleLeadConverted}

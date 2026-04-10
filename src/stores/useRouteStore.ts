@@ -126,13 +126,32 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         if (!local) return srv;
         const localRank = STATE_RANK[local.state] ?? 0;
         const serverRank = STATE_RANK[srv.state] ?? 0;
+
+        // BLD-20260410-BACKEND: lead_id is server-authoritative unless the
+        // local stop was promoted offline (shouldn't happen — /lead/convert
+        // requires online). stop_kind follows the server but if the local
+        // copy was already promoted to 'customer' via field conversion we
+        // respect that.
+        const localPromoted = local.is_lead === false || local.stop_kind === 'customer';
+
+        // Customer_id: server is authoritative UNLESS the local copy has a
+        // valid partner and the server lost it (rare, but protects against
+        // partial sync windows right after a field conversion).
+        const resolvedCustomerId =
+          (srv.customer_id && srv.customer_id > 0)
+            ? srv.customer_id
+            : (local.customer_id && local.customer_id > 0 ? local.customer_id : srv.customer_id);
+
         return {
           ...srv,
+          customer_id: resolvedCustomerId,
           // Keep the more advanced state. If equal, server wins.
           state: localRank > serverRank ? local.state : srv.state,
           // Preserve local lead promotion: once the vendor converted
           // a lead in the field, never downgrade it.
-          is_lead: local.is_lead === false ? false : srv.is_lead,
+          is_lead: localPromoted ? false : srv.is_lead,
+          stop_kind: localPromoted ? 'customer' : (srv.stop_kind ?? local.stop_kind),
+          lead_id: srv.lead_id ?? local.lead_id,
           customer_rank:
             (local.customer_rank ?? 0) > (srv.customer_rank ?? 0)
               ? local.customer_rank
@@ -180,6 +199,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
    */
   addVirtualStop: (customerId, customerName, meta) => {
     const virtualId = -(Date.now() % 1000000); // negative to avoid collision
+    const isLead = meta?.is_lead ?? false;
     const virtualStop: GFStop = {
       id: virtualId,
       customer_id: customerId,
@@ -188,7 +208,11 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       source_model: 'gf.route.stop',
       route_sequence: 999,
       is_offroute: meta?.is_offroute ?? true,
-      is_lead: meta?.is_lead ?? false,
+      is_lead: isLead,
+      // BLD-20260410-BACKEND: mirror stop_kind so the sale screen treats
+      // virtual lead stops identically to backend lead stops.
+      stop_kind: isLead ? 'lead' : 'customer',
+      lead_id: isLead ? meta?.origin_lead_id : undefined,
       origin_lead_id: meta?.origin_lead_id,
     };
     const stops = [...get().stops, virtualStop];
@@ -209,6 +233,11 @@ export const useRouteStore = create<RouteState>((set, get) => ({
             customer_id: newPartnerId,
             customer_name: newPartnerName ?? s.customer_name,
             is_lead: false, // promoted
+            // BLD-20260410-BACKEND: flip stop_kind to 'customer' so the next
+            // plan reload merge doesn't downgrade the stop back to lead.
+            // lead_id stays populated — backend uses it to mark the crm.lead
+            // as won at plan close.
+            stop_kind: 'customer' as const,
             customer_rank: 1,
           }
         : s

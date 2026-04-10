@@ -40,14 +40,30 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, radii } from '../../theme/tokens';
 import { Button } from '../ui/Button';
 import { convertLeadToCustomer, getPartner } from '../../services/partners';
+import { convertLeadStop, LeadConvertUpdates } from '../../services/gfLogistics';
 import { useSyncStore } from '../../stores/useSyncStore';
 
 interface Props {
   visible: boolean;
+  /**
+   * gf.route.stop ID. REQUIRED when the backend supports mixed stops
+   * (Sebastián's Plan 2). If > 0 we use the dedicated /lead/convert
+   * endpoint, which keeps lead_id on the stop and sets customer_id in
+   * place. If <= 0 (virtual/offroute stop) we fall back to the old
+   * direct res.partner write.
+   */
+  stopId: number;
+  /** res.partner id already linked to the stop (0 if it's a pure lead stop). */
   partnerId: number;
+  /** crm.lead id when stop_kind='lead'; preserved across conversion. */
+  leadId?: number;
   initialName: string;
   onClose: () => void;
-  onConfirmed: () => void;
+  /**
+   * Called after a successful conversion. Receives the canonical partner_id
+   * returned by the backend so the caller can update the stop binding.
+   */
+  onConfirmed: (newPartnerId: number) => void;
 }
 
 interface FormData {
@@ -105,7 +121,7 @@ const USOS = [
 ];
 
 export function LeadConversionModal({
-  visible, partnerId, initialName, onClose, onConfirmed,
+  visible, stopId, partnerId, leadId, initialName, onClose, onConfirmed,
 }: Props) {
   const [form, setForm] = useState<FormData>({ ...EMPTY, nombre: initialName || '' });
   const [loading, setLoading] = useState(false);
@@ -191,22 +207,19 @@ export function LeadConversionModal({
         commentParts.push(`Ref: ${form.referencia.trim()}`);
       }
 
-      const updates: Record<string, unknown> = {
+      const updates: LeadConvertUpdates = {
         name: form.necesitaFactura && form.razonSocial.trim()
           ? form.razonSocial.trim()
           : name,
         phone: form.telefono.trim(),
-        street: form.calle.trim() || undefined,
-        street2: form.colonia.trim() || undefined,
-        city: form.ciudad.trim() || undefined,
-        vat: form.necesitaFactura ? form.rfc.trim().toUpperCase() : undefined,
-        comment: commentParts.join(' · '),
       };
 
-      // Optional email
-      if (form.email.trim()) {
-        updates.email = form.email.trim();
-      }
+      if (form.calle.trim()) updates.street = form.calle.trim();
+      if (form.colonia.trim()) updates.street2 = form.colonia.trim();
+      if (form.ciudad.trim()) updates.city = form.ciudad.trim();
+      if (form.necesitaFactura) updates.vat = form.rfc.trim().toUpperCase();
+      if (commentParts.length) updates.comment = commentParts.join(' · ');
+      if (form.email.trim()) updates.email = form.email.trim();
 
       // Fiscal fields — only sent when "necesita factura".
       // Backend may or may not have these custom fields; Odoo create/write
@@ -215,7 +228,6 @@ export function LeadConversionModal({
         updates.zip = form.codigoPostal.trim();
         updates.l10n_mx_edi_fiscal_regime = form.regimenFiscal;
         updates.l10n_mx_edi_usage = form.usoCfdi;
-        updates.property_account_position_id = false; // force default
         updates.x_kold_requiere_factura = true;
       }
 
@@ -224,9 +236,30 @@ export function LeadConversionModal({
         updates.x_kold_conservador_capacidad = form.conservadorCapacidad.trim();
       }
 
-      const ok = await convertLeadToCustomer(partnerId, updates as any);
+      // BLD-20260410-BACKEND: Preferred path — the dedicated endpoint.
+      // Works for real stops (positive stop_id). Keeps lead_id + customer_id
+      // coherent in gf.route.stop without a second JSON-RPC roundtrip.
+      let newPartnerId: number | null = null;
+      if (stopId > 0) {
+        const result = await convertLeadStop(stopId, updates, leadId);
+        if (result && result.partner_id) {
+          newPartnerId = result.partner_id;
+        }
+      }
 
-      if (!ok) {
+      // Fallback — virtual/offroute stops (id < 0) or endpoint missing.
+      // We still update res.partner directly so the sale can continue.
+      if (!newPartnerId) {
+        if (partnerId > 0) {
+          const ok = await convertLeadToCustomer(
+            partnerId,
+            updates as unknown as Record<string, unknown>,
+          );
+          if (ok) newPartnerId = partnerId;
+        }
+      }
+
+      if (!newPartnerId) {
         Alert.alert(
           'No se pudo convertir',
           'El servidor rechazó la actualización del lead. Verifica los datos.',
@@ -235,7 +268,7 @@ export function LeadConversionModal({
         return;
       }
 
-      onConfirmed();
+      onConfirmed(newPartnerId);
     } catch (err) {
       console.warn('[LeadConversionModal] convert failed:', err);
       Alert.alert('Error', 'Ocurrió un error al convertir el lead. Intenta de nuevo.');
