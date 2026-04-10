@@ -1,15 +1,15 @@
 /**
  * Odoo JSON-RPC wrapper.
  * From KOLD_FIELD_SPEC.md section 5 — generic endpoints.
+ *
+ * BLD-20260409: odooRpc now uses sessionRpc (Odoo web session) instead of
+ * the custom Api-Key auth, because /web/dataset/call_kw requires a session
+ * cookie. The Api-Key + X-GF-Employee-Token headers only work with custom
+ * gf_logistics_ops endpoints (/get_records, /api/employee-sign-in, etc.)
  */
 
-import { postJsonRpc, postRpc } from './api';
-
-interface OdooRpcResult<T = unknown> {
-  success: boolean;
-  data: T;
-  error?: string;
-}
+import { postRpc } from './api';
+import { sessionRpc, hasServiceCredentials } from './odooSession';
 
 /**
  * Read records from Odoo via get_records endpoint.
@@ -48,7 +48,12 @@ export async function odooWrite(
 }
 
 /**
- * Direct JSON-RPC call to Odoo.
+ * Direct JSON-RPC call to Odoo via authenticated web session.
+ *
+ * Uses /web/dataset/call_kw with session cookie authentication.
+ * This properly resolves property fields (property_product_pricelist)
+ * and has full ORM access — unlike the custom /get_records endpoint
+ * which runs as public and can't read res.partner or pricelist items.
  */
 export async function odooRpc<T = unknown>(
   model: string,
@@ -56,7 +61,10 @@ export async function odooRpc<T = unknown>(
   args: unknown[] = [],
   kwargs: Record<string, unknown> = {}
 ): Promise<T> {
-  return await postJsonRpc<T>('/jsonrpc', { model, method, args, kwargs });
+  if (!hasServiceCredentials()) {
+    throw new Error('[odooRpc] Service credentials not configured. Call setServiceCredentials() first.');
+  }
+  return await sessionRpc<T>(model, method, args, kwargs);
 }
 
 /**

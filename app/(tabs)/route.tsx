@@ -3,8 +3,8 @@
  * Full list of stops with progress stats and action buttons.
  */
 
-import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useCallback } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -15,6 +15,7 @@ import { fonts } from '../../src/theme/typography';
 import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { GFStop } from '../../src/types/plan';
+import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -33,7 +34,11 @@ function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' |
 
 export default function RouteScreen() {
   const router = useRouter();
-  const { plan, stops, stopsCompleted, stopsTotal } = useRouteStore();
+  const { plan, stops, stopsCompleted, stopsTotal, loadPlan } = useRouteStore();
+  const refreshPlan = useCallback(async () => {
+    await loadPlan();
+  }, [loadPlan]);
+  const { refreshing, onRefresh } = useAsyncRefresh(refreshPlan);
 
   const sorted = [...stops].sort((a, b) => {
     const da = ['done', 'not_visited', 'closed'].includes(a.state) ? 0 : 1;
@@ -48,7 +53,17 @@ export default function RouteScreen() {
         title={plan?.route || plan?.name || 'Sin ruta'}
         rightAction={{ label: '🗺 Mapa', onPress: () => router.push('/map' as never) }}
       />
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
         {/* Action buttons */}
         <View style={styles.actionRow}>
           <Button label="📈 Analiticas" variant="secondary" small

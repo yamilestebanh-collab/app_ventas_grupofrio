@@ -18,6 +18,7 @@ import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography, fonts } from '../src/theme/typography';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { postRpc } from '../src/services/api';
+import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 
 interface RankingEntry {
   employee_id: number;
@@ -40,7 +41,6 @@ export default function RankingScreen() {
   const [ranking, setRanking] = useState<RankingEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
 
   const fetchRanking = useCallback(async () => {
     try {
@@ -80,16 +80,11 @@ export default function RankingScreen() {
       // Keep existing data
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, []);
+  const { refreshing, onRefresh } = useAsyncRefresh(fetchRanking);
 
   useEffect(() => {
-    fetchRanking();
-  }, [fetchRanking]);
-
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
     fetchRanking();
   }, [fetchRanking]);
 

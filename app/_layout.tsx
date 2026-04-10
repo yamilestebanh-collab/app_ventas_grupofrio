@@ -19,6 +19,7 @@ import {
 } from '@expo-google-fonts/space-mono';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { hasAuthTokens } from '../src/services/api';
+import { setServiceCredentials } from '../src/services/odooSession';
 import { colors } from '../src/theme/tokens';
 // Importamos con cuidado estos servicios
 import { rehydrateAppState } from '../src/services/rehydrate';
@@ -63,6 +64,11 @@ export default function RootLayout() {
             await clearTokens();
             // Don't set isAuthenticated — user will see login screen
           } else {
+            // 1.5. Initialize Odoo session credentials for pricelist access
+            // These are used by odooRpc → sessionRpc to authenticate with
+            // /web/dataset/call_kw, which requires a web session (not Api-Key).
+            setServiceCredentials('direccion@grupofrio.mx', 'AbundanciaGrupoFrio2025.');
+
             // 2. Rehydrate other state (sync queue, route, products)
             console.log('[Init] Rehydrating app state...');
             await rehydrateAppState().catch(e => console.error('Rehydrate failed', e));
@@ -104,6 +110,12 @@ export default function RootLayout() {
 
     const inAuthGroup = segments[0] === '(auth)';
     console.log('[Guard] Current segments:', segments, 'IsAuthenticated:', isAuthenticated);
+
+    // Ensure Odoo session credentials are configured whenever user is authenticated
+    // (covers both fresh login and app restart)
+    if (isAuthenticated) {
+      setServiceCredentials('direccion@grupofrio.mx', 'AbundanciaGrupoFrio2025.');
+    }
 
     if (!isAuthenticated && !inAuthGroup) {
       console.log('[Guard] Redirecting to login');

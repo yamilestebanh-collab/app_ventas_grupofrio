@@ -3,8 +3,8 @@
  * Request additional product from warehouse.
  */
 
-import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, ScrollView, TextInput, StyleSheet, Alert, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
@@ -14,6 +14,7 @@ import { typography, fonts } from '../src/theme/typography';
 import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
+import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 
 interface RefillLine {
   productId: number;
@@ -32,6 +33,11 @@ export default function RefillScreen() {
 
   const [lines, setLines] = useState<RefillLine[]>([]);
   const [notes, setNotes] = useState('');
+  const refreshProducts = useCallback(async () => {
+    if (!warehouseId) return;
+    await loadProducts(warehouseId);
+  }, [warehouseId, loadProducts]);
+  const { refreshing, onRefresh } = useAsyncRefresh(refreshProducts);
 
   // BLD-20260404-008: Auto-load products if store is empty.
   // Previously this screen depended on the user visiting the Inventory tab
@@ -84,7 +90,17 @@ export default function RefillScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="Solicitar Carga" showBack />
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
         <Text style={styles.hint}>Solicita producto adicional a tu almacen/sucursal.</Text>
 
         <Text style={styles.sectionTitle}>PRODUCTOS A SOLICITAR</Text>

@@ -10,6 +10,7 @@ import { create } from 'zustand';
 import NetInfo from '@react-native-community/netinfo';
 import { setAuthTokens, clearAuthTokens, setBaseUrl } from '../services/api';
 import { signOut } from '../services/gfLogistics';
+import { clearOdooSession } from '../services/odooSession';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { useRouteStore } from './useRouteStore';
 
@@ -339,6 +340,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await signOut();
     } finally {
+      clearOdooSession();
       await clearRouteCache();
       await clearAuthTokens();
       await storeRemove(STORAGE_KEYS.AUTH_STATE);

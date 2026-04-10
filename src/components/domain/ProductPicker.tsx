@@ -82,17 +82,21 @@ function fuzzyMatch(text: string, query: string): boolean {
   return words.every((w) => t.includes(w));
 }
 
-/** Format price with IVA for display — uses base price, applies 16% */
-function displayPrice(basePrice: number): string {
-  const safe = typeof basePrice === 'number' && !isNaN(basePrice) ? basePrice : 0;
-  return formatCurrency(safe * (1 + IVA_RATE));
+/** Format price for display.
+ *  - Customer pricelist prices are already NET (IVA included) → show as-is.
+ *  - Public list_price is base (sin IVA) → apply ×1.16.
+ *  The `isNet` flag distinguishes between the two. */
+function displayPrice(price: number, isNet = false): string {
+  const safe = typeof price === 'number' && !isNaN(price) ? price : 0;
+  return formatCurrency(isNet ? safe : safe * (1 + IVA_RATE));
 }
 
 type EnrichedProduct = TruckProduct & {
   category: CategoryKey;
   isRecommended: boolean;
   isAlreadyAdded: boolean;
-  customerPrice: number; // base price for this customer (may differ from list_price)
+  customerPrice: number; // price for this customer (may differ from list_price)
+  hasCustomPrice: boolean; // true when price comes from customer pricelist (already NET w/IVA)
 };
 
 // ═══ Component ═══
@@ -142,7 +146,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
       if (!cancelled) setPriceLoading(false);
     });
     return () => { cancelled = true; };
-  }, [visible, partnerId]);
+  }, [visible, partnerId, products]);
 
   const toggleView = useCallback(() => {
     const next: ViewMode = viewMode === 'list' ? 'grid' : 'list';
@@ -160,13 +164,17 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
 
   // Enrich products with customer price
   const enrichedProducts = useMemo(() => {
-    return products.map((p) => ({
-      ...p,
-      category: categorizeProduct(p.name),
-      isRecommended: recommendations.has(p.id),
-      isAlreadyAdded: existingProductIds.includes(p.id),
-      customerPrice: priceMap.get(p.id) ?? p.list_price,
-    }));
+    return products.map((p) => {
+      const custom = priceMap.get(p.id);
+      return {
+        ...p,
+        category: categorizeProduct(p.name),
+        isRecommended: recommendations.has(p.id),
+        isAlreadyAdded: existingProductIds.includes(p.id),
+        customerPrice: custom ?? p.list_price,
+        hasCustomPrice: custom !== undefined,
+      };
+    });
   }, [products, recommendations, existingProductIds, priceMap]);
 
   // Filter + sort
@@ -207,14 +215,16 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     if (existingProductIds.includes(product.id)) return;
 
     const qty = quantities[product.id] || 1;
-    // SaleLineItem.price = customer base price (sin IVA)
-    // IVA is computed in saleTotal() = subtotal * 1.16
-    const safePrice = (typeof product.customerPrice === 'number' && !isNaN(product.customerPrice))
+    // SaleLineItem.price = base price SIN IVA (for Odoo sync).
+    // Customer pricelist prices are NET (con IVA) → divide by 1.16 to get base.
+    // Public list_price is already base (sin IVA) → use as-is.
+    const rawPrice = (typeof product.customerPrice === 'number' && !isNaN(product.customerPrice))
       ? product.customerPrice : 0;
+    const safePrice = product.hasCustomPrice ? rawPrice / (1 + IVA_RATE) : rawPrice;
     const line: SaleLineItem = {
       productId: product.id,
       productName: product.name,
-      price: safePrice,
+      price: Math.round(safePrice * 100) / 100,
       qty: Math.min(qty, product.qty_display),
       stock: product.qty_display,
       weight: product.weight || 5,
@@ -264,7 +274,6 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     const alreadyAdded = p.isAlreadyAdded;
     const disabled = outOfStock || alreadyAdded;
     const qty = quantities[p.id] || 1;
-    const hasCustomPrice = priceMap.has(p.id);
 
     return (
       <View style={[styles.listRow, disabled && styles.rowDisabled]}>
@@ -285,9 +294,9 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           </View>
           <View style={styles.listMeta}>
             <Text style={[styles.listPrice, disabled && styles.textDim]}>
-              {displayPrice(p.customerPrice)}
+              {displayPrice(p.customerPrice, p.hasCustomPrice)}
             </Text>
-            {hasCustomPrice && <Text style={styles.customPriceTag}>cliente</Text>}
+            {p.hasCustomPrice && <Text style={styles.customPriceTag}>cliente</Text>}
             <Text style={styles.sep}>·</Text>
             <Text style={[styles.listStock, outOfStock && styles.textRed]}>
               {outOfStock ? 'Agotado' : `${p.qty_display} disp.`}
@@ -321,7 +330,6 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     const alreadyAdded = p.isAlreadyAdded;
     const disabled = outOfStock || alreadyAdded;
     const qty = quantities[p.id] || 1;
-    const hasCustomPrice = priceMap.has(p.id);
 
     return (
       <View style={[styles.gridCard, disabled && styles.rowDisabled]}>
@@ -351,9 +359,9 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
 
           <View style={styles.gridPriceRow}>
             <Text style={[styles.gridPrice, disabled && styles.textDim]}>
-              {displayPrice(p.customerPrice)}
+              {displayPrice(p.customerPrice, p.hasCustomPrice)}
             </Text>
-            {hasCustomPrice && <Text style={styles.customPriceTagSm}>cliente</Text>}
+            {p.hasCustomPrice && <Text style={styles.customPriceTagSm}>cliente</Text>}
           </View>
 
           <Text style={[styles.gridStock, outOfStock && styles.textRed]}>

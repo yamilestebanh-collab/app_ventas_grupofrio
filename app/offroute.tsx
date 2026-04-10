@@ -14,7 +14,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, ActivityIndicator, Alert,
+  StyleSheet, ActivityIndicator, Alert, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -25,6 +25,7 @@ import { odooRead } from '../src/services/odooRpc';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { useVisitStore } from '../src/stores/useVisitStore';
+import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 
 interface CustomerResult {
   id: number;
@@ -83,6 +84,12 @@ export default function OffRouteScreen() {
       setIsSearching(false);
     }
   }, [search]);
+  const refreshSearch = useCallback(async () => {
+    const q = search.trim();
+    if (!hasSearched || q.length < 3) return;
+    await doSearch();
+  }, [doSearch, hasSearched, search]);
+  const { refreshing, onRefresh } = useAsyncRefresh(refreshSearch);
 
   function handleSelect(customer: CustomerResult) {
     // Create a virtual stop and navigate to the sale screen
@@ -176,6 +183,13 @@ export default function OffRouteScreen() {
             renderItem={renderCustomer}
             keyExtractor={(c) => String(c.id)}
             contentContainerStyle={styles.list}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={colors.primary}
+              />
+            }
             ListEmptyComponent={
               hasSearched ? (
                 <View style={styles.emptyCard}>

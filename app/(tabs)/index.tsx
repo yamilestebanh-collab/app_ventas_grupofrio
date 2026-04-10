@@ -3,8 +3,8 @@
  * Full implementation with real layout matching HTML.
  */
 
-import React, { useEffect, useMemo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useCallback, useEffect, useMemo } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,6 +18,7 @@ import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -40,6 +41,10 @@ export default function HomeScreen() {
   // BLD-20260408: Use getAlerts() method (not s.alerts property which doesn't exist)
   const getAlerts = useKoldStore((s) => s.getAlerts);
   const koldAlerts = useMemo(() => getAlerts() || [], [getAlerts]);
+  const refreshPlan = useCallback(async () => {
+    await loadPlan();
+  }, [loadPlan]);
+  const { refreshing, onRefresh } = useAsyncRefresh(refreshPlan);
 
   // Next stops (pending + in_progress, max 4)
   const nextStops = useMemo(() => 
@@ -77,7 +82,17 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
         {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}
         <View style={styles.weatherCard}>
           <Text style={{ fontSize: 22 }}>🌤️</Text>

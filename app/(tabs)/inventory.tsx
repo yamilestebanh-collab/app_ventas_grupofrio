@@ -3,8 +3,8 @@
  * Truck stock overview, product list, action buttons.
  */
 
-import React, { useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import React, { useCallback, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -16,6 +16,7 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatPriceWithIVA } from '../../src/utils/time';
+import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 
 export default function InventoryScreen() {
   const router = useRouter();
@@ -23,6 +24,11 @@ export default function InventoryScreen() {
   const {
     products, totalStockKg, isLoading, error, loadProducts,
   } = useProductStore();
+  const refreshInventory = useCallback(async () => {
+    if (!warehouseId) return;
+    await loadProducts(warehouseId);
+  }, [warehouseId, loadProducts]);
+  const { refreshing, onRefresh } = useAsyncRefresh(refreshInventory);
 
   useEffect(() => {
     if (warehouseId && products.length === 0) {
@@ -45,7 +51,17 @@ export default function InventoryScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="📦 Camioneta" />
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
         {/* Stock summary card */}
         <Card style={styles.summaryCard}>
           <View style={styles.summaryRow}>
