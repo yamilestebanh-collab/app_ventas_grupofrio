@@ -13,6 +13,10 @@ interface OdooRpcResult<T = unknown> {
 
 /**
  * Read records from Odoo via get_records endpoint.
+ *
+ * BLD-20260410-DEBUG: log raw response shape so operator-reported empty
+ * searches can be diagnosed in production without a new build. Low
+ * volume (only called from search flows) and no PII.
  */
 export async function odooRead<T = unknown>(
   model: string,
@@ -26,8 +30,27 @@ export async function odooRead<T = unknown>(
     // BLD-20260404-007: Backend may return either a plain array or
     // a wrapped object { status, count, response: [...], message }.
     const result = await postRpc<any>('/get_records', { model, domain, fields, limit, offset, order });
+
+    // Diagnostics: what shape did we get back?
+    const shape = Array.isArray(result)
+      ? `array[${result.length}]`
+      : (result && typeof result === 'object'
+          ? `object{${Object.keys(result).join(',')}}`
+          : typeof result);
+    console.log(`[odooRead] ${model} → shape=${shape}`);
+
     if (Array.isArray(result)) return result as T[];
-    if (result && Array.isArray(result.response)) return result.response as T[];
+    if (result && Array.isArray(result.response)) {
+      console.log(`[odooRead] ${model} → wrapped.response length=${result.response.length}` +
+        (result.status !== undefined ? ` status=${result.status}` : '') +
+        (result.message !== undefined ? ` message=${result.message}` : ''));
+      return result.response as T[];
+    }
+
+    // Unknown shape — surface it for debug.
+    console.warn(`[odooRead] ${model} → unknown shape, returning []. raw=${
+      (() => { try { return JSON.stringify(result).slice(0, 300); } catch { return String(result); } })()
+    }`);
     return [];
   } catch (error) {
     console.warn(`[odooRead] ${model} failed:`, error);

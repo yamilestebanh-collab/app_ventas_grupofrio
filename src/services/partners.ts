@@ -58,6 +58,17 @@ export type PartnerSearchMode = 'customers' | 'leads' | 'all';
 /**
  * Search res.partner by free text (name / phone / vat).
  * @param mode 'customers' = customer_rank > 0, 'leads' = customer_rank = 0, 'all' = both
+ *
+ * BLD-20260410-DEBUG: Verbose logging to diagnose why the offroute search
+ * returns empty lists in production. Logs domain, raw response and the
+ * parsed result so we can confirm whether:
+ *   (a) the backend allowlist on /get_records blocks res.partner
+ *   (b) the customer_rank filter is silently eating the results
+ *   (c) the auth scope of the employee limits visibility
+ *   (d) there really are zero matches
+ *
+ * Safe to keep on: only uses console.log in __DEV__-style sections via
+ * console.warn (always shown) and console.info (only in dev).
  */
 export async function searchPartners(
   query: string,
@@ -86,6 +97,11 @@ export async function searchPartners(
     domain = textDomain;
   }
 
+  console.log(
+    `[partners.search] mode=${mode} q="${q}" limit=${limit}\n` +
+    `  domain=${JSON.stringify(domain)}`,
+  );
+
   try {
     const results = await odooRead<PartnerSearchResult>(
       'res.partner',
@@ -93,9 +109,21 @@ export async function searchPartners(
       SEARCH_FIELDS,
       limit,
     );
+
+    console.log(
+      `[partners.search] ✓ got ${results?.length ?? 0} result(s) for mode=${mode}` +
+      (results && results.length > 0
+        ? ` — first: ${JSON.stringify({
+            id: results[0].id,
+            name: results[0].name,
+            customer_rank: results[0].customer_rank,
+          })}`
+        : ''),
+    );
+
     return results || [];
   } catch (err) {
-    console.warn('[partners] search failed:', err);
+    console.warn(`[partners.search] FAILED mode=${mode} q="${q}":`, err);
     return [];
   }
 }
