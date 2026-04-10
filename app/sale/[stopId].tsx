@@ -15,6 +15,7 @@ import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore, SaleLineItem } from '../../src/stores/useVisitStore';
 import { useProductStore } from '../../src/stores/useProductStore';
+import { useAuthStore } from '../../src/stores/useAuthStore';
 import { SaveIndicator } from '../../src/components/ui/SaveIndicator';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCurrency, formatPriceWithIVA } from '../../src/utils/time';
@@ -38,12 +39,20 @@ export default function SaleScreen() {
 
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
+  const warehouseId = useAuthStore((s) => s.warehouseId);
+  const employeeId = useAuthStore((s) => s.employeeId);
 
   const [pickerVisible, setPickerVisible] = React.useState(false);
   const [leadModalVisible, setLeadModalVisible] = React.useState(false);
   // BLD-20260410: Tracks whether this stop's lead has already been converted
   // in this session (to avoid re-asking after a successful conversion).
   const [leadConverted, setLeadConverted] = React.useState(false);
+  // BLD-20260410-CRIT: Visit result for leads — drives the 3 possible outcomes:
+  //   'sale'         → venta real, pagable
+  //   'muestra'      → muestra sin costo, precios a 0
+  //   'consignacion' → consignación, precios a 0, pago diferido
+  type LeadResult = 'sale' | 'muestra' | 'consignacion';
+  const [leadResult, setLeadResult] = React.useState<LeadResult>('sale');
 
   if (!stop) {
     return (
@@ -121,14 +130,18 @@ export default function SaleScreen() {
     // BLD-20260408-P0: Detect off-route sales (virtual stops have negative IDs)
     const isOffRoute = stop.id < 0 || !!stop.is_offroute;
 
-    // Create sale order payload with idempotency key + audit metadata
+    // BLD-20260410-CRIT: Ship enough context for gf_control_tower_v2 + backend
+    // audit. Unknown fields are safely ignored by Odoo create.
     const payload = {
       _operationId: operationId,
       partner_id: stop.customer_id,
       stop_id: isOffRoute ? null : stop.id, // Don't send negative virtual IDs to backend
       is_offroute: isOffRoute,
       origin_lead_id: stop.origin_lead_id ?? null,
+      lead_result: leadResult, // sale | muestra | consignacion (drives pricing)
       payment_method: salePaymentMethod,
+      warehouse_id: warehouseId,
+      employee_id: employeeId,
       lines: saleLines.map((l) => ({
         product_id: l.productId,
         qty: l.qty,
@@ -191,6 +204,52 @@ export default function SaleScreen() {
           <Text style={styles.forecastHint}>
             Sugerido KoldDemand: {forecast.predicted_kg.toFixed(0)} kg
           </Text>
+        )}
+
+        {/* BLD-20260410-CRIT: Lead result selector — only for leads.
+            Venta = pedido normal; Muestra = sin costo para demostrar producto;
+            Consignación = producto dejado, pago diferido (precio 0 en Odoo,
+            conciliación posterior). */}
+        {stopIsLead && (
+          <View style={styles.leadResultRow}>
+            <Text style={styles.leadResultTitle}>Resultado de la visita al lead</Text>
+            <View style={styles.leadResultButtons}>
+              <TouchableOpacity
+                style={[styles.leadResultBtn, leadResult === 'sale' && styles.leadResultBtnActive]}
+                onPress={() => setLeadResult('sale')}
+              >
+                <Text style={styles.leadResultIcon}>💰</Text>
+                <Text style={[styles.leadResultLabel, leadResult === 'sale' && styles.leadResultLabelActive]}>
+                  Venta
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.leadResultBtn, leadResult === 'muestra' && styles.leadResultBtnActive]}
+                onPress={() => setLeadResult('muestra')}
+              >
+                <Text style={styles.leadResultIcon}>🎁</Text>
+                <Text style={[styles.leadResultLabel, leadResult === 'muestra' && styles.leadResultLabelActive]}>
+                  Muestra
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.leadResultBtn, leadResult === 'consignacion' && styles.leadResultBtnActive]}
+                onPress={() => setLeadResult('consignacion')}
+              >
+                <Text style={styles.leadResultIcon}>📦</Text>
+                <Text style={[styles.leadResultLabel, leadResult === 'consignacion' && styles.leadResultLabelActive]}>
+                  Consigna
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {leadResult !== 'sale' && (
+              <Text style={styles.leadResultHint}>
+                {leadResult === 'muestra'
+                  ? 'Los productos irán a $0 en Odoo. Se marcará como muestra.'
+                  : 'Consignación: producto entregado sin cobro inmediato. Pago posterior.'}
+              </Text>
+            )}
+          </View>
         )}
 
         {/* Product lines */}
@@ -392,6 +451,51 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.warning,
     lineHeight: 15,
+  },
+  // BLD-20260410-CRIT: Lead result selector
+  leadResultRow: {
+    backgroundColor: colors.cardLighter,
+    borderRadius: radii.card,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  leadResultTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    color: colors.textDim,
+    marginBottom: 8,
+  },
+  leadResultButtons: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  leadResultBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: radii.button,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 4,
+  },
+  leadResultBtnActive: {
+    backgroundColor: 'rgba(37,99,235,0.12)',
+    borderColor: colors.primary,
+  },
+  leadResultIcon: { fontSize: 20 },
+  leadResultLabel: { fontSize: 11, fontWeight: '600', color: colors.textDim },
+  leadResultLabelActive: { color: colors.primary },
+  leadResultHint: {
+    fontSize: 10,
+    color: colors.textDim,
+    marginTop: 6,
+    fontStyle: 'italic',
+    lineHeight: 14,
   },
   offrouteBadge: {
     alignSelf: 'flex-start',

@@ -29,6 +29,7 @@ export default function RefillScreen() {
   const loadProducts = useProductStore((s) => s.loadProducts);
   const enqueue = useSyncStore((s) => s.enqueue);
   const warehouseId = useAuthStore((s) => s.warehouseId);
+  const employeeId = useAuthStore((s) => s.employeeId);
 
   const [lines, setLines] = useState<RefillLine[]>([]);
   const [notes, setNotes] = useState('');
@@ -64,10 +65,13 @@ export default function RefillScreen() {
       return;
     }
 
-    enqueue('prospection', {
-      type: 'refill',
-      model: 'van.refill.request',
+    // BLD-20260410-CRIT: Usa el type 'refill' (P1) en vez de 'prospection'
+    // para que: (a) tenga prioridad de business, (b) dispare rollback si
+    // falla MAX_RETRIES, (c) llegue al dispatcher correcto que escribe en
+    // van.refill.request.
+    enqueue('refill', {
       warehouse_id: warehouseId,
+      employee_id: employeeId,
       lines: lines.map((l) => ({ product_id: l.productId, qty: l.qty })),
       notes,
       timestamp: Date.now(),

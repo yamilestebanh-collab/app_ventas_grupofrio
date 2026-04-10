@@ -13,6 +13,7 @@ import { colors, spacing, radii } from '../src/theme/tokens';
 import { fonts } from '../src/theme/typography';
 import { useProductStore } from '../src/stores/useProductStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
+import { useAuthStore } from '../src/stores/useAuthStore';
 
 const UNLOAD_REASONS = ['Fin de ruta', 'Producto danado', 'Merma', 'Otro'];
 
@@ -21,6 +22,8 @@ export default function UnloadScreen() {
   const products = useProductStore((s) => s.products);
   const updateLocalStock = useProductStore((s) => s.updateLocalStock);
   const enqueue = useSyncStore((s) => s.enqueue);
+  const warehouseId = useAuthStore((s) => s.warehouseId);
+  const employeeId = useAuthStore((s) => s.employeeId);
 
   const [reason, setReason] = useState('Fin de ruta');
   const [returnQtys, setReturnQtys] = useState<Record<number, number>>({});
@@ -45,25 +48,32 @@ export default function UnloadScreen() {
       return;
     }
 
-    // Enqueue
-    enqueue('prospection', {
-      type: 'unload',
-      model: 'van.unload.request',
+    // BLD-20260410-CRIT: Devolución al almacén = SOLICITUD (request).
+    // Usa type 'unload' (P1 + rollback) en lugar de 'prospection' para
+    // que no quede escondida en la cola de telemetría y se pueda
+    // revertir el stock local si falla MAX_RETRIES.
+    enqueue('unload', {
+      warehouse_id: warehouseId,
+      employee_id: employeeId,
       lines,
       reason,
+      notes: '',
       timestamp: Date.now(),
     });
 
     // Update local stock
     lines.forEach((l) => updateLocalStock(l.product_id, -l.qty));
 
-    Alert.alert('Devolucion registrada', 'Los productos fueron devueltos.');
+    Alert.alert(
+      'Solicitud de devolución enviada',
+      'Los productos quedaron registrados como solicitud de devolución al almacén.',
+    );
     router.back();
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <TopBar title="Devolucion a Almacen" showBack />
+      <TopBar title="Solicitud Devolución" showBack />
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         <Text style={styles.hint}>
@@ -116,7 +126,7 @@ export default function UnloadScreen() {
         </View>
 
         <Button
-          label="📤 Confirmar Devolucion"
+          label="📤 Enviar Solicitud de Devolución"
           onPress={handleConfirm}
           fullWidth
           style={{ marginTop: 14 }}

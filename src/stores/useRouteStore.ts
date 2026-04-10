@@ -59,7 +59,15 @@ export const useRouteStore = create<RouteState>((set, get) => ({
     try {
       const plan = await getMyPlan();
       if (!plan) {
-        set({ plan: null, stops: [], isLoading: false, error: 'Sin plan para hoy' });
+        // BLD-20260410-CRIT: Do NOT wipe stops when the backend replies "no plan".
+        // Operators reported check-in "reverting after seconds" because a stale
+        // my_plan call (or a second useEffect fire) was blanking the stops store.
+        // Keep whatever we already had rehydrated so the UI does not lose state.
+        set({
+          plan: get().plan,
+          isLoading: false,
+          error: get().stops.length > 0 ? null : 'Sin plan para hoy',
+        });
         return;
       }
 
@@ -77,11 +85,68 @@ export const useRouteStore = create<RouteState>((set, get) => ({
 
       // Enrich stops with score + forecast
       const koldStore = useKoldStore.getState();
-      const stops = rawStops.map((s) => ({
+      const incoming = rawStops.map((s) => ({
         ...s,
         _koldScore: koldStore.getScore(s.customer_id) || undefined,
         _koldForecast: koldStore.getForecast(s.customer_id) || undefined,
       }));
+
+      // BLD-20260410-CRIT: MERGE strategy instead of wholesale replace.
+      //
+      // Root cause of "check-in reverts after seconds": loadPlan() used to
+      // replace the whole `stops` array with backend data. When the sync
+      // queue had not yet flushed the checkin call, the next loadPlan
+      // (home screen useEffect, network flip, focus) would overwrite the
+      // local `in_progress` / `done` state and ALSO delete every virtual
+      // stop (offroute / new customer / leads convertidos) because the
+      // backend had no knowledge of them.
+      //
+      // Merge rules:
+      //   1. Preserve every virtual stop (id < 0).
+      //   2. For real stops, take the backend stop but keep local state
+      //      that is MORE ADVANCED than the backend state (client wrote
+      //      first, sync flushed later). State order: done > in_progress > pending.
+      //   3. Preserve local partner promotion (is_lead flipped to false,
+      //      customer_rank bumped) so a converted lead doesn't bounce back.
+      const prev = get().stops;
+      const prevById = new Map(prev.map((s) => [s.id, s]));
+
+      const STATE_RANK: Record<string, number> = {
+        pending: 0,
+        in_progress: 1,
+        no_stock: 2,
+        rejected: 2,
+        not_visited: 2,
+        closed: 2,
+        done: 3,
+      };
+
+      const merged: GFStop[] = incoming.map((srv) => {
+        const local = prevById.get(srv.id);
+        if (!local) return srv;
+        const localRank = STATE_RANK[local.state] ?? 0;
+        const serverRank = STATE_RANK[srv.state] ?? 0;
+        return {
+          ...srv,
+          // Keep the more advanced state. If equal, server wins.
+          state: localRank > serverRank ? local.state : srv.state,
+          // Preserve local lead promotion: once the vendor converted
+          // a lead in the field, never downgrade it.
+          is_lead: local.is_lead === false ? false : srv.is_lead,
+          customer_rank:
+            (local.customer_rank ?? 0) > (srv.customer_rank ?? 0)
+              ? local.customer_rank
+              : srv.customer_rank,
+          origin_lead_id: local.origin_lead_id ?? srv.origin_lead_id,
+          // Keep enriched intelligence already computed
+          _koldScore: srv._koldScore ?? local._koldScore,
+          _koldForecast: srv._koldForecast ?? local._koldForecast,
+        };
+      });
+
+      // Preserve virtual stops (id < 0) — backend never returns them.
+      const virtualStops = prev.filter((s) => s.id < 0);
+      const stops: GFStop[] = [...merged, ...virtualStops];
 
       const completed = stops.filter((s) =>
         ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(s.state)

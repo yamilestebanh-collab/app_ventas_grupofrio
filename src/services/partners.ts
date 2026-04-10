@@ -150,30 +150,62 @@ export async function createPartner(input: NewPartnerInput): Promise<number | nu
 }
 
 /**
+ * Fields we accept as pass-through when converting a lead. Any key in this
+ * set (or matching the prefix rules below) is forwarded to Odoo verbatim so
+ * the LeadConversionModal can send fiscal/custom fields without a service
+ * update. Unknown keys on the backend are ignored by create_update.
+ */
+const CONVERT_PASS_THROUGH = new Set<string>([
+  'name', 'phone', 'mobile', 'email',
+  'street', 'street2', 'city', 'zip', 'state_id', 'country_id',
+  'vat', 'comment',
+  'l10n_mx_edi_fiscal_regime', 'l10n_mx_edi_usage',
+  'property_account_position_id',
+  'company_type',
+]);
+
+function isCustomKoldField(k: string): boolean {
+  return k.startsWith('x_kold_') || k.startsWith('x_studio_');
+}
+
+/**
  * Convert an existing lead (customer_rank=0) into a real customer by
  * updating fields and setting customer_rank=1. Returns true on success.
  *
  * Online-only. Used when a stop in the route was a lead and the vendor
  * completes the data + makes a sale.
+ *
+ * BLD-20260410-CRIT: accepts an arbitrary `updates` dict so LeadConversionModal
+ * can push fiscal fields (zip, l10n_mx_edi_*, x_kold_*) without having to
+ * extend NewPartnerInput. Only whitelisted keys (+ custom `x_kold_*` /
+ * `x_studio_*`) are forwarded; anything else is dropped defensively.
  */
 export async function convertLeadToCustomer(
   partnerId: number,
-  updates: Partial<NewPartnerInput>,
+  updates: Record<string, unknown>,
 ): Promise<boolean> {
   const dict: Record<string, unknown> = {
     customer_rank: 1, // Promote to customer
   };
 
-  if (updates.name && updates.name.trim()) dict.name = updates.name.trim();
-  if (updates.phone && updates.phone.trim()) dict.phone = updates.phone.trim();
-  if (updates.mobile && updates.mobile.trim()) dict.mobile = updates.mobile.trim();
-  if (updates.street && updates.street.trim()) dict.street = updates.street.trim();
-  if (updates.street2 && updates.street2.trim()) dict.street2 = updates.street2.trim();
-  if (updates.city && updates.city.trim()) dict.city = updates.city.trim();
-  if (updates.vat && updates.vat.trim()) dict.vat = updates.vat.trim().toUpperCase();
+  for (const [key, rawVal] of Object.entries(updates || {})) {
+    if (rawVal === undefined || rawVal === null) continue;
+    if (!(CONVERT_PASS_THROUGH.has(key) || isCustomKoldField(key))) continue;
 
-  if (updates.comment && updates.comment.trim()) {
-    dict.comment = `${updates.comment.trim()}\n[KOLD Field] Lead convertido a cliente en campo.`;
+    if (typeof rawVal === 'string') {
+      const trimmed = rawVal.trim();
+      if (!trimmed) continue;
+      dict[key] = key === 'vat' ? trimmed.toUpperCase() : trimmed;
+    } else {
+      dict[key] = rawVal;
+    }
+  }
+
+  // Tag the comment so supervisors can audit the conversion in Odoo.
+  if (typeof dict.comment === 'string') {
+    dict.comment = `${dict.comment}\n[KOLD Field] Lead convertido a cliente en campo.`;
+  } else {
+    dict.comment = '[KOLD Field] Lead convertido a cliente en campo.';
   }
 
   try {

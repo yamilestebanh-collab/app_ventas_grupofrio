@@ -384,7 +384,16 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
   const hasCustomPrices = priceMap.size > 0;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      // BLD-20260410-CRIT: Android hardware back was not closing the picker.
+      // Without onRequestClose the Modal silently ignored the back event and
+      // the user appeared "stuck" inside the product screen. We now dismiss
+      // the picker properly, which bubbles control back to the sale screen.
+      onRequestClose={() => { setSearch(''); setQuantities({}); onClose(); }}
+    >
       <SafeAreaView style={styles.modal}>
         {/* Header */}
         <View style={styles.header}>

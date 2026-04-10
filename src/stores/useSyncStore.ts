@@ -712,20 +712,32 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
 
   switch (type) {
     case 'sale_order': {
-      // BLD-20260410: Offroute sales ship partner_id only (no gf.route.stop).
-      // Virtual stops use negative IDs; never forward those to Odoo.
-      // Note field (kept in local queue for audit; only sent if backend supports it).
+      // BLD-20260410-CRIT: Sale dispatch for pilot.
+      //
+      // Problems operators reported:
+      //  1. Sales made in the app were NOT reaching Odoo.
+      //  2. gf_control_tower_v2 could not correlate sales to stops / vans.
+      //
+      // Fixes:
+      //  - Virtual stops (negative IDs) are NEVER forwarded; only real
+      //    gf.route.stop IDs go into gf_stop_id.
+      //  - We ship enough context fields (warehouse_id, gf_stop_id,
+      //    x_kold_*) so gf_control_tower_v2 can render the sale.
+      //  - Unknown fields are silently ignored by Odoo create, so if
+      //    the backend is older we still succeed — no schema lock-in.
+      //  - Audit note carries offroute / lead origin / payment method.
       const rawStopId = payload.stop_id as number | null | undefined;
       const validStopId = typeof rawStopId === 'number' && rawStopId > 0 ? rawStopId : null;
       const isOffroute = !!payload.is_offroute || validStopId === null;
+      const leadResult = (payload.lead_result as string | undefined) || null;
 
       const auditBits: string[] = [];
       if (isOffroute) auditBits.push('offroute');
       if (payload.origin_lead_id) auditBits.push(`lead_origin=${payload.origin_lead_id}`);
+      if (leadResult) auditBits.push(`lead_result=${leadResult}`);
       if (payload.payment_method) auditBits.push(`pay=${payload.payment_method}`);
-      const noteLine = auditBits.length > 0
-        ? `[KOLD Field] ${auditBits.join(' · ')}`
-        : undefined;
+      auditBits.push(`op=${item.id.slice(0, 8)}`);
+      const noteLine = `[KOLD Field] ${auditBits.join(' · ')}`;
 
       const saleDict: Record<string, unknown> = {
         partner_id: payload.partner_id,
@@ -736,8 +748,31 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
             price_unit: l.price_unit,
           },
         ]) || [],
+        note: noteLine,
       };
-      if (noteLine) saleDict.note = noteLine;
+
+      // Optional fields — backend ignores unknown ones.
+      if (validStopId) saleDict.gf_stop_id = validStopId;
+      if (payload.warehouse_id) saleDict.warehouse_id = payload.warehouse_id;
+      if (payload.pricelist_id) saleDict.pricelist_id = payload.pricelist_id;
+      if (payload.employee_id) saleDict.x_kold_employee_id = payload.employee_id;
+      if (payload.payment_method) saleDict.x_kold_payment_method = payload.payment_method;
+      if (isOffroute) saleDict.x_kold_is_offroute = true;
+      if (payload.origin_lead_id) saleDict.x_kold_origin_lead_id = payload.origin_lead_id;
+      if (leadResult) saleDict.x_kold_lead_result = leadResult;
+      // Idempotency key — backend can use it to enforce server-side dedup.
+      saleDict.x_kold_operation_id = item.id;
+
+      // Muestra sin costo & consignación go at $0 to avoid charging the lead.
+      if (leadResult === 'muestra' || leadResult === 'consignacion') {
+        saleDict.order_line = (payload.lines as any[])?.map((l: any) => [
+          0, 0, {
+            product_id: l.product_id,
+            product_uom_qty: l.qty,
+            price_unit: 0,
+          },
+        ]) || [];
+      }
 
       await postRpc('/api/create_update', {
         model: 'sale.order',
@@ -826,23 +861,45 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       }
       break;
 
-    // V2 types — basic dispatchers. Payloads follow the same
-    // postRpc pattern. Backend contracts TBD per endpoint.
-    case 'refill':
+    // BLD-20260410-CRIT: Cargas & devoluciones son SOLICITUDES.
+    // Hasta que backend confirme modelos, enviamos a los modelos
+    // request-style. Lines se pasan como commands de Odoo.
+    case 'refill': {
+      const refillLines = (payload.lines as any[]) || [];
       await postRpc('/api/create_update', {
         model: 'van.refill.request',
         method: 'create',
-        dict: payload,
+        dict: {
+          employee_id: payload.employee_id,
+          warehouse_id: payload.warehouse_id,
+          notes: payload.notes || '',
+          x_kold_operation_id: item.id,
+          line_ids: refillLines.map((l: any) => [
+            0, 0, { product_id: l.product_id, qty: l.qty },
+          ]),
+        },
       });
       break;
+    }
 
-    case 'unload':
+    case 'unload': {
+      const unloadLines = (payload.lines as any[]) || [];
       await postRpc('/api/create_update', {
-        model: 'van.unload',
+        model: 'van.unload.request',
         method: 'create',
-        dict: payload,
+        dict: {
+          employee_id: payload.employee_id,
+          warehouse_id: payload.warehouse_id,
+          reason: payload.reason || 'Fin de ruta',
+          notes: payload.notes || '',
+          x_kold_operation_id: item.id,
+          line_ids: unloadLines.map((l: any) => [
+            0, 0, { product_id: l.product_id, qty: l.qty },
+          ]),
+        },
       });
       break;
+    }
 
     case 'collection':
       await postRpc('/api/create_update', {
@@ -937,28 +994,43 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
   }
 }
 
-// ═══ Legacy ±5min sale duplicate check (KEPT until B.3 server-side idempotency) ═══
+// ═══ Sale dedup via idempotency key (BLD-20260410-CRIT) ═══
+//
+// The previous implementation looked up ANY sale.order for the same
+// partner within ±5 minutes and marked the current item as duplicate.
+// That generated silent data loss whenever a vendor closed a second
+// legitimate sale to the same client in a short window (e.g. cash sale
+// then a credit sale for another product). We now only skip when the
+// exact operation_id is already present in Odoo — which is what the
+// backend writes into sale.order.note / x_kold_operation_id.
 
 async function checkSaleDuplicate(item: SyncQueueItem): Promise<boolean> {
   if (item.type !== 'sale_order') return false;
 
-  const opId = item.payload._operationId as string;
+  const opId = item.id; // We write item.id into the note, not _operationId (same value now).
   if (!opId) return false;
 
   try {
-    const existing = await postRpc<any[]>('/get_records', {
+    // Try the specific field first (if backend has it).
+    let existing = await postRpc<any[]>('/get_records', {
       model: 'sale.order',
-      domain: [
-        ['partner_id', '=', item.payload.partner_id],
-        ['create_date', '>=', new Date(item.created_at - 300000).toISOString()],
-        ['create_date', '<=', new Date(item.created_at + 300000).toISOString()],
-      ],
-      fields: ['id', 'name', 'amount_total'],
+      domain: [['x_kold_operation_id', '=', opId]],
+      fields: ['id', 'name'],
       limit: 1,
-    });
+    }).catch(() => null);
+
+    if (!existing || existing.length === 0) {
+      // Fall back: match by fragment of op id inside note.
+      existing = await postRpc<any[]>('/get_records', {
+        model: 'sale.order',
+        domain: [['note', 'ilike', `op=${opId.slice(0, 8)}`]],
+        fields: ['id', 'name'],
+        limit: 1,
+      }).catch(() => null);
+    }
 
     if (existing && existing.length > 0) {
-      logWarn('sync', 'legacy_dedup_hit', {
+      logWarn('sync', 'dedup_hit_opid', {
         id: item.id,
         existing_order: existing[0].name,
         opId,

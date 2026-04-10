@@ -125,7 +125,9 @@ export default function NewCustomerScreen() {
         [
           {
             text: 'OK',
-            onPress: () => router.replace(`/sale/${virtualStopId}` as never),
+            // BLD-20260410-CRIT: use push (not replace) so the vendor can
+            // use Android back to return to offroute / home if needed.
+            onPress: () => router.push(`/sale/${virtualStopId}` as never),
           },
         ],
       );
