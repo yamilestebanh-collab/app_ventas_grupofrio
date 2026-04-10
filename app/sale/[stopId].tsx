@@ -47,6 +47,10 @@ export default function SaleScreen() {
   // BLD-20260410: Tracks whether this stop's lead has already been converted
   // in this session (to avoid re-asking after a successful conversion).
   const [leadConverted, setLeadConverted] = React.useState(false);
+  // BLD-20260410-UX: true when the modal was opened via the "Confirmar"
+  // button (so we auto-continue the sale on success). False when the
+  // vendor opened it eagerly via "Completar datos del lead ahora".
+  const [continueAfterConvert, setContinueAfterConvert] = React.useState(false);
   // BLD-20260410-CRIT: Visit result for leads — drives the 3 possible outcomes:
   //   'sale'         → venta real, pagable
   //   'muestra'      → muestra sin costo, precios a 0
@@ -129,6 +133,7 @@ export default function SaleScreen() {
         );
         return;
       }
+      setContinueAfterConvert(true); // auto-continue sale after convert
       setLeadModalVisible(true);
       return;
     }
@@ -187,8 +192,15 @@ export default function SaleScreen() {
     updateStopPartner(stop.id, newPartnerId, stop.customer_name);
     setLeadConverted(true);
     setLeadModalVisible(false);
-    // Auto-continue: immediately try the sale now that the lead is a customer.
-    setTimeout(() => { handleConfirm(); }, 50);
+
+    // BLD-20260410-UX: only auto-continue when the modal was triggered by
+    // pressing Confirmar. If the vendor opened it eagerly via "Completar
+    // datos del lead", just stay on the sale screen so they can keep
+    // building the order.
+    if (continueAfterConvert) {
+      setContinueAfterConvert(false);
+      setTimeout(() => { handleConfirm(); }, 50);
+    }
   }
 
   return (
@@ -204,8 +216,31 @@ export default function SaleScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.leadBannerTitle}>Lead sin convertir</Text>
               <Text style={styles.leadBannerText}>
-                Al confirmar la venta se pedirán los datos para convertirlo en cliente.
+                Captura los datos del propietario para convertirlo en cliente antes o al confirmar la venta.
               </Text>
+              {/* BLD-20260410-UX: allow capturing lead data BEFORE the sale
+                  is built. Vendors reported it was frustrating to type 10
+                  product lines and only then discover that a RFC was
+                  required. This button opens the same conversion modal
+                  used on confirm, but eagerly. */}
+              <TouchableOpacity
+                style={styles.leadCompleteBtn}
+                onPress={() => {
+                  if (!isOnline) {
+                    Alert.alert(
+                      'Sin conexión',
+                      'Necesitas internet para convertir el lead en cliente.',
+                    );
+                    return;
+                  }
+                  setLeadModalVisible(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.leadCompleteBtnText}>
+                  📝 Completar datos del lead ahora
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
         )}
@@ -432,7 +467,10 @@ export default function SaleScreen() {
         partnerId={stop.customer_id}
         leadId={stop.lead_id ?? stop.origin_lead_id}
         initialName={stop.customer_name}
-        onClose={() => setLeadModalVisible(false)}
+        onClose={() => {
+          setLeadModalVisible(false);
+          setContinueAfterConvert(false);
+        }}
         onConfirmed={handleLeadConverted}
       />
     </SafeAreaView>
@@ -467,6 +505,20 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.warning,
     lineHeight: 15,
+  },
+  leadCompleteBtn: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.warning,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radii.button,
+  },
+  leadCompleteBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFF',
+    letterSpacing: 0.3,
   },
   // BLD-20260410-CRIT: Lead result selector
   leadResultRow: {
