@@ -58,6 +58,14 @@ interface Props {
   /** crm.lead id when stop_kind='lead'; preserved across conversion. */
   leadId?: number;
   initialName: string;
+  /**
+   * BLD-20260410-UX2: 'lead' → standard conversion flow.
+   *                    'edit-customer' → update existing partner fields
+   *                    (RFC, régimen, dirección) without treating it as
+   *                    lead promotion. Only changes copy; the network
+   *                    path is identical because backend accepts both.
+   */
+  mode?: 'lead' | 'edit-customer';
   onClose: () => void;
   /**
    * Called after a successful conversion. Receives the canonical partner_id
@@ -121,8 +129,9 @@ const USOS = [
 ];
 
 export function LeadConversionModal({
-  visible, stopId, partnerId, leadId, initialName, onClose, onConfirmed,
+  visible, stopId, partnerId, leadId, initialName, mode = 'lead', onClose, onConfirmed,
 }: Props) {
+  const isEditMode = mode === 'edit-customer';
   const [form, setForm] = useState<FormData>({ ...EMPTY, nombre: initialName || '' });
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -288,7 +297,9 @@ export function LeadConversionModal({
           <TouchableOpacity onPress={onClose} disabled={submitting}>
             <Text style={styles.close}>Cancelar</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Convertir lead a cliente</Text>
+          <Text style={styles.title}>
+            {isEditMode ? 'Datos del cliente' : 'Convertir lead a cliente'}
+          </Text>
           <View style={{ width: 60 }} />
         </View>
 
@@ -298,8 +309,9 @@ export function LeadConversionModal({
           keyboardShouldPersistTaps="handled"
         >
           <Text style={styles.intro}>
-            Este contacto es un lead. Completa los datos mínimos comerciales
-            (y, si procede, los fiscales) para convertirlo en cliente.
+            {isEditMode
+              ? 'Completa o actualiza los datos de este cliente. Los cambios se guardan en Odoo al confirmar.'
+              : 'Este contacto es un lead. Completa los datos mínimos comerciales (y, si procede, los fiscales) para convertirlo en cliente.'}
           </Text>
 
           {loading && (
@@ -454,7 +466,11 @@ export function LeadConversionModal({
           )}
 
           <Button
-            label={submitting ? 'Convirtiendo...' : 'Convertir y continuar venta'}
+            label={
+              submitting
+                ? (isEditMode ? 'Guardando...' : 'Convirtiendo...')
+                : (isEditMode ? 'Guardar cambios' : 'Convertir y continuar venta')
+            }
             onPress={handleConfirm}
             fullWidth
             disabled={submitting || loading || !isOnline}

@@ -254,6 +254,34 @@ export default function SaleScreen() {
             <Text style={styles.offrouteBadgeText}>VENTA FUERA DE RUTA</Text>
           </View>
         )}
+        {/* BLD-20260410-UX2: Siempre permitir editar/completar datos del
+            cliente, incluso si NO es lead. Operadores reportaron que
+            muchos res.partner importados en Odoo vienen con RFC vacío,
+            dirección incompleta o sin régimen fiscal — y sin un punto
+            de entrada visible no había forma de arreglarlo desde campo.
+            Este botón abre el mismo modal de conversión, pero sobre un
+            partner existente: actualiza los campos sin tocar customer_rank
+            (salvo que el backend /lead/convert decida bumpearlo). */}
+        {!stopIsLead && stop.customer_id > 0 && (
+          <TouchableOpacity
+            style={styles.editPartnerBtn}
+            onPress={() => {
+              if (!isOnline) {
+                Alert.alert(
+                  'Sin conexión',
+                  'Necesitas internet para actualizar los datos del cliente.',
+                );
+                return;
+              }
+              setLeadModalVisible(true);
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.editPartnerBtnText}>
+              ✏️ Completar / actualizar datos del cliente
+            </Text>
+          </TouchableOpacity>
+        )}
         {forecast && (
           <Text style={styles.forecastHint}>
             Sugerido KoldDemand: {forecast.predicted_kg.toFixed(0)} kg
@@ -465,13 +493,16 @@ export default function SaleScreen() {
         )}
       </ScrollView>
 
-      {/* BLD-20260410: Lead → customer conversion modal */}
+      {/* BLD-20260410: Lead → customer conversion modal.
+          BLD-20260410-UX2: Reusado también para editar customers existentes
+          (cuando stopIsLead=false) — mismo endpoint, solo cambia la copy. */}
       <LeadConversionModal
         visible={leadModalVisible}
         stopId={stop.id}
         partnerId={stop.customer_id}
         leadId={stop.lead_id ?? stop.origin_lead_id}
         initialName={stop.customer_name}
+        mode={stopIsLead ? 'lead' : 'edit-customer'}
         onClose={() => {
           setLeadModalVisible(false);
           setContinueAfterConvert(false);
@@ -523,6 +554,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#FFF',
+    letterSpacing: 0.3,
+  },
+  // BLD-20260410-UX2: editable partner CTA (siempre visible para customers)
+  editPartnerBtn: {
+    alignSelf: 'stretch',
+    marginBottom: 10,
+    backgroundColor: colors.cardLighter,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.button,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  editPartnerBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
     letterSpacing: 0.3,
   },
   // BLD-20260410-CRIT: Lead result selector

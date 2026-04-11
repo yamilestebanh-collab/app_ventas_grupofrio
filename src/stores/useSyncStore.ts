@@ -204,6 +204,26 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       })
       .catch(() => {});
 
+    // BLD-20260410-SYNCFIX: Kick the queue immediately if we're already
+    // online. Before this, processQueue() only ran on an offline→online
+    // transition or from the manual button in /sync, so every sale made
+    // while the vendor was continuously online was stuck in 'pending'
+    // forever and never reached Odoo. We give the caller ~200 ms so the
+    // state set above (and client-event meta) can settle, then kick a
+    // non-blocking cycle. isOnline/isSyncing guards inside processQueue
+    // make this safe to spam.
+    if (get().isOnline) {
+      setTimeout(() => {
+        try {
+          get().processQueue();
+        } catch (e) {
+          logWarn('sync', 'post_enqueue_trigger_failed', {
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }, 200);
+    }
+
     return id;
   },
 
