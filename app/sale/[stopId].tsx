@@ -82,20 +82,25 @@ export default function SaleScreen() {
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
                      && hasStock && !saleConfirmed;
 
-  // BLD-20260410-BACKEND: Detect if this stop is a lead that still needs
-  // conversion. Priority:
-  //   1. stop_kind === 'lead' (canonical, from backend Plan 2)
-  //   2. explicit lead_id without customer_id
-  //   3. legacy is_lead flag
-  //   4. legacy customer_rank=0 (prospect)
-  // After a successful conversion in the current session we force the
-  // stop to behave as a customer via leadConverted regardless of what
-  // the backend eventually returns on the next plan reload.
+  // BLD-20260410-HOTFIX: Detect if this stop is a lead that still needs
+  // conversion. CONSERVATIVE — only triggers on EXPLICIT markers. The
+  // previous version also fired on `customer_rank === 0`, which turns
+  // out to be a false positive for many real customers in production:
+  // lots of imported partners in Odoo have customer_rank=0 even though
+  // they ARE paying clients. Classifying them as leads blocked every
+  // sale because the conversion modal would demand fiscal data before
+  // the sale could be enqueued.
+  //
+  // Priority now:
+  //   1. stop_kind === 'lead'           (canonical, from backend Plan 2)
+  //   2. is_lead === true               (explicit flag set by offroute/virtual stop)
+  //   3. lead_id > 0 AND no customer_id (pure lead stop, backend or virtual)
+  //
+  // customer_rank is no longer used as a classifier.
   const stopIsLead = !!stop && !leadConverted && (
     stop.stop_kind === 'lead' ||
-    (stop.lead_id != null && stop.lead_id > 0 && !(stop.customer_id > 0)) ||
     stop.is_lead === true ||
-    stop.customer_rank === 0
+    (stop.lead_id != null && stop.lead_id > 0 && !(stop.customer_id > 0))
   );
 
   async function handleConfirm() {
