@@ -82,26 +82,48 @@ export default function SaleScreen() {
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
                      && hasStock && !saleConfirmed;
 
-  // BLD-20260410-HOTFIX: Detect if this stop is a lead that still needs
-  // conversion. CONSERVATIVE — only triggers on EXPLICIT markers. The
-  // previous version also fired on `customer_rank === 0`, which turns
-  // out to be a false positive for many real customers in production:
-  // lots of imported partners in Odoo have customer_rank=0 even though
-  // they ARE paying clients. Classifying them as leads blocked every
-  // sale because the conversion modal would demand fiscal data before
-  // the sale could be enqueued.
+  // BLD-20260410-LEAD2: Detect if this stop is a lead candidate.
   //
-  // Priority now:
-  //   1. stop_kind === 'lead'           (canonical, from backend Plan 2)
-  //   2. is_lead === true               (explicit flag set by offroute/virtual stop)
-  //   3. lead_id > 0 AND no customer_id (pure lead stop, backend or virtual)
+  // History:
+  //   v1 used customer_rank===0 and blocked sales (false positive on
+  //       real customers imported with rank=0 and no phone/RFC).
+  //   v2 removed customer_rank entirely (BLD-20260410-HOTFIX). That
+  //       broke lead-only routes because the backend does NOT send
+  //       stop_kind/is_lead/lead_id in production yet — the only
+  //       signal it gives for a lead is customer_rank=0.
   //
-  // customer_rank is no longer used as a classifier.
+  // v3 (this one) brings customer_rank back as a SOFT classifier and
+  // decouples the banner from the sale flow:
+  //   - The "Completar lead" banner/button appears whenever there's a
+  //     reasonable signal it's a lead.
+  //   - The sale is NEVER blocked by this. The vendor may tap the
+  //     button to complete data, or just confirm the sale directly.
+  //     This avoids the old dead-end while still surfacing the CTA.
+  //
+  // Priority of signals (any one is enough):
+  //   1. stop_kind === 'lead'                (canonical, Plan 2)
+  //   2. is_lead === true                    (virtual/offroute flag)
+  //   3. lead_id > 0 AND no customer_id      (pure lead stop)
+  //   4. customer_rank === 0                 (soft fallback)
   const stopIsLead = !!stop && !leadConverted && (
     stop.stop_kind === 'lead' ||
     stop.is_lead === true ||
-    (stop.lead_id != null && stop.lead_id > 0 && !(stop.customer_id > 0))
+    (stop.lead_id != null && stop.lead_id > 0 && !(stop.customer_id > 0)) ||
+    stop.customer_rank === 0
   );
+
+  // BLD-20260410-LEAD2: one-shot diagnostic so we can see in the device
+  // log what lead-related fields the backend is actually sending. Helps
+  // Sebastián debug Plan 2 deployment without a new build.
+  React.useEffect(() => {
+    if (!stop) return;
+    console.log(
+      `[sale] stop=${stop.id} customer_id=${stop.customer_id} ` +
+      `customer_rank=${stop.customer_rank} stop_kind=${stop.stop_kind} ` +
+      `is_lead=${stop.is_lead} lead_id=${stop.lead_id} ` +
+      `origin_lead_id=${stop.origin_lead_id} stopIsLead=${stopIsLead}`,
+    );
+  }, [stop?.id, stopIsLead]);
 
   async function handleConfirm() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
@@ -127,21 +149,14 @@ export default function SaleScreen() {
 
     if (!stop) return;
 
-    // BLD-20260410: If this is a lead, force conversion before the sale
-    // can be enqueued. The modal handles the partner write; on success
-    // onLeadConverted() is called and the user taps Confirmar again.
-    if (stopIsLead) {
-      if (!isOnline) {
-        Alert.alert(
-          'Sin conexión',
-          'Este contacto es un lead. Necesitas conexión para completar sus datos antes de cerrar la venta.',
-        );
-        return;
-      }
-      setContinueAfterConvert(true); // auto-continue sale after convert
-      setLeadModalVisible(true);
-      return;
-    }
+    // BLD-20260410-LEAD2: We NO LONGER block the sale on lead detection.
+    // The previous behaviour dead-ended operators on real customers that
+    // Odoo had imported with customer_rank=0 and no phone (could not
+    // satisfy the modal's required fields). Now the "Completar lead"
+    // button is opt-in — the vendor taps it before confirming if they
+    // have the data, or proceeds with the sale if the data is already
+    // in Odoo. The backend `/lead/convert` update-only path means the
+    // sale itself doesn't need the modal to have run.
 
     // V1.2: Lock to prevent duplicate
     const operationId = lockSaleConfirm();
@@ -197,15 +212,9 @@ export default function SaleScreen() {
     updateStopPartner(stop.id, newPartnerId, stop.customer_name);
     setLeadConverted(true);
     setLeadModalVisible(false);
-
-    // BLD-20260410-UX: only auto-continue when the modal was triggered by
-    // pressing Confirmar. If the vendor opened it eagerly via "Completar
-    // datos del lead", just stay on the sale screen so they can keep
-    // building the order.
-    if (continueAfterConvert) {
-      setContinueAfterConvert(false);
-      setTimeout(() => { handleConfirm(); }, 50);
-    }
+    // BLD-20260410-LEAD2: modal is always opt-in now. The vendor stays on
+    // the sale screen after conversion to keep building the order.
+    setContinueAfterConvert(false);
   }
 
   return (
@@ -221,7 +230,7 @@ export default function SaleScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.leadBannerTitle}>Lead sin convertir</Text>
               <Text style={styles.leadBannerText}>
-                Captura los datos del propietario para convertirlo en cliente antes o al confirmar la venta.
+                Captura los datos del propietario para convertirlo en cliente. Puedes hacerlo ahora o continuar la venta directamente.
               </Text>
               {/* BLD-20260410-UX: allow capturing lead data BEFORE the sale
                   is built. Vendors reported it was frustrating to type 10

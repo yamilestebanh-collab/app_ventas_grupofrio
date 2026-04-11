@@ -73,6 +73,26 @@ export const useRouteStore = create<RouteState>((set, get) => ({
 
       const rawStops = await getPlanStops(plan.plan_id);
 
+      // BLD-20260410-LEAD2: Diagnostic — dump lead-related fields per stop
+      // so we can confirm what Plan 2 is actually shipping in production.
+      // Low volume (runs on plan load only). Remove once Sebastián
+      // confirms stop_kind/lead_id are populated on every lead stop.
+      try {
+        const sample = rawStops.slice(0, 5).map((s: any) => ({
+          id: s.id,
+          customer_id: s.customer_id,
+          customer_rank: s.customer_rank,
+          stop_kind: s.stop_kind,
+          is_lead: s.is_lead,
+          lead_id: s.lead_id,
+          origin_lead_id: s.origin_lead_id,
+        }));
+        console.log(
+          `[loadPlan] got ${rawStops.length} stops. ` +
+          `lead-field sample (first 5): ${JSON.stringify(sample)}`,
+        );
+      } catch {}
+
       // F5: Load KOLD intelligence for all route partners
       const partnerIds = [...new Set(rawStops.map((s) => s.customer_id).filter(Boolean))];
       if (partnerIds.length > 0) {
