@@ -15,6 +15,9 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { takePhoto } from '../../src/services/camera';
+import { useLocationStore } from '../../src/stores/useLocationStore';
+import { checkOut } from '../../src/services/gfLogistics';
+import { buildCheckoutPayload } from '../../src/services/checkoutResult';
 
 const NO_SALE_REASONS = [
   { id: 1, label: '🚪 Cerrado', code: 'closed' },
@@ -43,6 +46,9 @@ export default function NoSaleScreen() {
   } = useVisitStore();
 
   const enqueue = useSyncStore((s) => s.enqueue);
+  const isOnline = useSyncStore((s) => s.isOnline);
+  const latitude = useLocationStore((s) => s.latitude);
+  const longitude = useLocationStore((s) => s.longitude);
   const [selectedReasonId, setSelectedReasonId] = useState<number | null>(noSaleReasonId);
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(noSaleCompetitor);
   const [notes, setNotes] = useState(noSaleNotes);
@@ -61,7 +67,7 @@ export default function NoSaleScreen() {
   const showCompetitor = selectedReasonId === 5; // competitor reason
   const canSave = selectedReasonId != null && noSalePhotoTaken;
 
-  function handleSave() {
+  async function handleSave() {
     if (!canSave) {
       const missing = [];
       if (!selectedReasonId) missing.push('razon de no-venta');
@@ -75,8 +81,7 @@ export default function NoSaleScreen() {
     setNoSaleReason(selectedReasonId!, reason?.label || '');
     setNoSaleNotes(notes);
 
-    // Enqueue
-    enqueue('no_sale', {
+    const noSaleId = enqueue('no_sale', {
       stop_id: stop.id,
       partner_id: stop.customer_id,
       reason_id: selectedReasonId,
@@ -85,6 +90,43 @@ export default function NoSaleScreen() {
       notes,
       timestamp: Date.now(),
     });
+
+    const checkoutPayload = buildCheckoutPayload({
+      stopId: stop.id,
+      latitude: latitude || 0,
+      longitude: longitude || 0,
+      saleTotal: 0,
+      noSaleReasonId: selectedReasonId,
+    });
+
+    try {
+      if (isOnline) {
+        await checkOut(
+          checkoutPayload.stop_id,
+          checkoutPayload.latitude,
+          checkoutPayload.longitude,
+          checkoutPayload.result_status,
+        );
+      } else {
+        enqueue(
+          'checkout',
+          {
+            ...checkoutPayload,
+            timestamp: Date.now(),
+          },
+          { dependsOn: [noSaleId] },
+        );
+      }
+    } catch {
+      enqueue(
+        'checkout',
+        {
+          ...checkoutPayload,
+          timestamp: Date.now(),
+        },
+        { dependsOn: [noSaleId] },
+      );
+    }
 
     // Update state and reset visit cleanly
     updateStopState(stop.id, 'not_visited');

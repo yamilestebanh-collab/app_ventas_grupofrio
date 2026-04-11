@@ -16,8 +16,10 @@ import { useSyncStore } from '../stores/useSyncStore';
 import { useRouteStore } from '../stores/useRouteStore';
 import { useProductStore } from '../stores/useProductStore';
 import { useAuthStore } from '../stores/useAuthStore';
+import { useVisitStore } from '../stores/useVisitStore';
 import { GFPlan, GFStop } from '../types/plan';
 import { TruckProduct } from '../stores/useProductStore';
+import { PersistedVisitSnapshot, shouldRehydrateVisit } from './visitPersistence';
 // V2: Error persistence & periodic flush
 import { loadPersistedErrors, startErrorPersistence } from '../utils/logger';
 
@@ -64,12 +66,22 @@ export async function rehydrateAppState(): Promise<{
           lastSync: Date.now(),
         });
         hasPlan = true;
+
+        const visitSnapshot = await storeLoad<PersistedVisitSnapshot>(STORAGE_KEYS.VISIT_STATE);
+        if (shouldRehydrateVisit(visitSnapshot, stops)) {
+          useVisitStore.getState().restoreVisit(visitSnapshot!);
+        } else {
+          await storeRemove(STORAGE_KEYS.VISIT_STATE);
+        }
       } else {
         await Promise.all([
           storeRemove(STORAGE_KEYS.PLAN),
           storeRemove(STORAGE_KEYS.STOPS),
+          storeRemove(STORAGE_KEYS.VISIT_STATE),
         ]);
       }
+    } else {
+      await storeRemove(STORAGE_KEYS.VISIT_STATE);
     }
 
     // 3. Products — also restore inventorySource if available

@@ -2,7 +2,8 @@
  * GF Logistics REST API endpoints.
  *
  * IMPORTANT: These are REST endpoints (gf_logistics_ops module), NOT JSON-RPC.
- * They expect plain payloads: { stop_id: 123, latitude: ... }
+ * They expect plain payloads like { stop_id: 123, latitude: ... }.
+ * Checkout now also sends result_status so Odoo can close the stop.
  * Do NOT wrap with jsonrpc/params — that causes 400 errors.
  *
  * For Odoo JSON-RPC endpoints (/jsonrpc, /get_records, /api/create_update),
@@ -14,6 +15,7 @@
 
 import { postRest } from './api';
 import { GFPlan, GFStop } from '../types/plan';
+import { CheckoutResultStatus } from './checkoutResult';
 // BLD-008: optional client event metadata. Feature-flagged inside the
 // helper — safe to pass from anywhere.
 import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientEvent';
@@ -91,10 +93,11 @@ export async function checkOut(
   stopId: number,
   latitude: number,
   longitude: number,
+  resultStatus: CheckoutResultStatus,
   meta?: ClientEventMeta | null,
 ): Promise<boolean> {
   const payload = attachClientMetaToRestPayload(
-    { stop_id: stopId, latitude, longitude },
+    { stop_id: stopId, latitude, longitude, result_status: resultStatus },
     meta ?? null,
   );
   const result = await postRest<{ success: boolean }>(`${GF_BASE}/stop/checkout`, payload);

@@ -85,6 +85,7 @@ export const STORAGE_KEYS = {
   // Route
   PLAN: 'route:plan',
   STOPS: 'route:stops',
+  VISIT_STATE: 'visit:active',
 
   // Products
   PRODUCTS: 'entities:products',

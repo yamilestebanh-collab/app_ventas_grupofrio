@@ -16,6 +16,7 @@ import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { GFStop } from '../../src/types/plan';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
+import { getPlanTypeLabel, getStopTypeLabel } from '../../src/services/routePresentation';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -46,6 +47,7 @@ export default function RouteScreen() {
     if (da !== db) return da - db;
     return (a.route_sequence || 0) - (b.route_sequence || 0);
   });
+  const planTypeLabel = getPlanTypeLabel(plan?.generation_mode);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -74,13 +76,19 @@ export default function RouteScreen() {
 
         {/* BLD-20260408-P0: Off-route sale button */}
         <Button
-          label="🔍 Venta fuera de ruta"
+          label="🔍 Visita especial"
           variant="secondary"
           small
           fullWidth
           onPress={() => router.push('/offroute' as never)}
           style={{ marginBottom: 10 }}
         />
+
+        {planTypeLabel && (
+          <View style={styles.routeTypeRow}>
+            <Badge label={planTypeLabel} variant="blue" />
+          </View>
+        )}
 
         {/* Stats row */}
         <View style={styles.statsRow}>
@@ -108,6 +116,7 @@ export default function RouteScreen() {
           sorted.map((stop, idx) => {
             const isDone = ['done', 'not_visited', 'closed'].includes(stop.state);
             const badge = getStopBadge(stop);
+            const stopTypeLabel = getStopTypeLabel(stop);
             return (
               <TouchableOpacity
                 key={stop.id}
@@ -128,6 +137,11 @@ export default function RouteScreen() {
                   </Text>
                   {badge ? <Badge label={badge.label} variant={badge.variant} /> : null}
                 </View>
+                {stopTypeLabel && (
+                  <View style={{ marginTop: 6 }}>
+                    <Badge label={stopTypeLabel} variant={stop._entityType === 'lead' ? 'orange' : 'dim'} />
+                  </View>
+                )}
               </TouchableOpacity>
             );
           })
@@ -141,6 +155,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   actionRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
+  routeTypeRow: { marginBottom: 10 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
   statItem: { alignItems: 'center' },
   statLabel: { fontSize: 10, color: colors.textDim, marginBottom: 2 },

@@ -26,6 +26,9 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useKoldStore } from '../../src/stores/useKoldStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
+import { useVisitStore } from '../../src/stores/useVisitStore';
+import { deriveVisitGuard } from '../../src/services/visitGuards';
+import { getStopTypeLabel } from '../../src/services/routePresentation';
 
 export default function StopDetailScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -65,8 +68,21 @@ export default function StopDetailScreen() {
   const scoreModuleAvailable = useKoldStore((s) => s.scoreModuleAvailable);
   const demandModuleAvailable = useKoldStore((s) => s.demandModuleAvailable);
   const allowOffDistanceVisits = useAuthStore((s) => s.allowOffDistanceVisits);
+  const phase = useVisitStore((s) => s.phase);
+  const currentStopId = useVisitStore((s) => s.currentStopId);
   const canOperateOffDistance = allowOffDistanceVisits && !!(stop.customer_latitude && stop.customer_longitude);
+  const visitGuard = deriveVisitGuard({
+    stopState: stop.state,
+    stopId: stop.id,
+    currentStopId,
+    phase,
+  });
   const canStartVisit = isGeoOk || canOperateOffDistance;
+  const canOpenVisit = visitGuard.canResumeVisit || (visitGuard.canStartVisit && canStartVisit);
+  const primaryActionLabel = visitGuard.canStartVisit && !canStartVisit
+    ? `🔴 Fuera de rango (${Math.round(distance)}m)`
+    : visitGuard.primaryActionLabel;
+  const stopTypeLabel = getStopTypeLabel(stop);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -89,6 +105,14 @@ export default function StopDetailScreen() {
                 )}
               </View>
             </View>
+            {stopTypeLabel && (
+              <View style={{ marginBottom: 8 }}>
+                <Badge
+                  label={stopTypeLabel}
+                  variant={stop._entityType === 'lead' ? 'orange' : 'dim'}
+                />
+              </View>
+            )}
             {!scoreModuleAvailable && (
               <Text style={styles.moduleNote}>
                 KoldScore no disponible. Instala el modulo para ver inteligencia comercial.
@@ -114,12 +138,12 @@ export default function StopDetailScreen() {
         {/* Action buttons — real navigation */}
         <View style={styles.actions}>
           <TouchableOpacity
-            style={[styles.checkinBtn, !canStartVisit && { opacity: 0.4 }]}
-            onPress={() => canStartVisit && router.push(`/checkin/${stop.id}` as never)}
-            disabled={!canStartVisit}
+            style={[styles.checkinBtn, !canOpenVisit && { opacity: 0.4 }]}
+            onPress={() => canOpenVisit && router.push(`/checkin/${stop.id}` as never)}
+            disabled={!canOpenVisit}
             activeOpacity={0.8}
           >
-            <Text style={styles.checkinText}>📍 Check-in · Iniciar Visita</Text>
+            <Text style={styles.checkinText}>{primaryActionLabel}</Text>
           </TouchableOpacity>
           {canOperateOffDistance && !isGeoOk && (
             <Text style={styles.overrideHint}>
@@ -132,13 +156,14 @@ export default function StopDetailScreen() {
               variant="secondary"
               onPress={() => router.push(`/sale/${stop.id}` as never)}
               style={{ flex: 1 }}
-              disabled={!canStartVisit}
+              disabled={!visitGuard.canAccessVisitActions}
             />
             <Button
               label="✕ No venta"
               variant="danger"
               onPress={() => router.push(`/nosale/${stop.id}` as never)}
               style={{ flex: 1 }}
+              disabled={!visitGuard.canAccessVisitActions}
             />
           </View>
           <View style={styles.actionRow}>

@@ -8,6 +8,8 @@
 
 import { create } from 'zustand';
 import { GFStop } from '../types/plan';
+import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
+import { PersistedVisitSnapshot, buildVisitSnapshot } from '../services/visitPersistence';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -69,6 +71,7 @@ interface VisitState {
 
   // Reset
   resetVisit: () => void;
+  restoreVisit: (snapshot: PersistedVisitSnapshot) => void;
 
   // V1.2: Anti-duplicate
   saleConfirmed: boolean;        // Prevents double-tap
@@ -112,24 +115,49 @@ const initialState = {
   saleOperationId: null as string | null,
 };
 
+function persistVisitState(state: {
+  phase: VisitPhase;
+  currentStopId: number | null;
+  currentStop: GFStop | null;
+  checkInTime: number | null;
+  checkInLat: number | null;
+  checkInLon: number | null;
+  elapsedSeconds: number;
+}) {
+  const snapshot = buildVisitSnapshot(state);
+  if (snapshot) {
+    void storeSave(STORAGE_KEYS.VISIT_STATE, snapshot);
+    return;
+  }
+  void storeRemove(STORAGE_KEYS.VISIT_STATE);
+}
+
 export const useVisitStore = create<VisitState>((set, get) => ({
   ...initialState,
 
-  startVisit: (stop, lat, lon) => set({
-    phase: 'checked_in',
-    currentStopId: stop.id,
-    currentStop: stop,
-    checkInTime: Date.now(),
-    checkInLat: lat,
-    checkInLon: lon,
-    elapsedSeconds: 0,
-  }),
+  startVisit: (stop, lat, lon) => {
+    const nextState = {
+      phase: 'checked_in' as VisitPhase,
+      currentStopId: stop.id,
+      currentStop: stop,
+      checkInTime: Date.now(),
+      checkInLat: lat,
+      checkInLon: lon,
+      elapsedSeconds: 0,
+    };
+    set(nextState);
+    persistVisitState(nextState);
+  },
 
-  endVisit: (_lat, _lon) => set({
-    phase: 'checked_out',
-  }),
+  endVisit: (_lat, _lon) => {
+    set({ phase: 'checked_out' });
+    persistVisitState({ ...get(), phase: 'checked_out' });
+  },
 
-  setPhase: (phase) => set({ phase }),
+  setPhase: (phase) => {
+    set({ phase });
+    persistVisitState({ ...get(), phase });
+  },
 
   // Sale
   addSaleLine: (line) => {
@@ -170,12 +198,30 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   tickTimer: () => {
     const { checkInTime } = get();
     if (checkInTime) {
-      set({ elapsedSeconds: Math.floor((Date.now() - checkInTime) / 1000) });
+      const elapsedSeconds = Math.floor((Date.now() - checkInTime) / 1000);
+      set({ elapsedSeconds });
+      persistVisitState({ ...get(), elapsedSeconds });
     }
   },
 
   // Reset
-  resetVisit: () => set({ ...initialState }),
+  resetVisit: () => {
+    set({ ...initialState });
+    persistVisitState({ ...initialState });
+  },
+
+  restoreVisit: (snapshot) => {
+    set({
+      phase: snapshot.phase,
+      currentStopId: snapshot.currentStopId,
+      currentStop: snapshot.currentStop,
+      checkInTime: snapshot.checkInTime,
+      checkInLat: snapshot.checkInLat,
+      checkInLon: snapshot.checkInLon,
+      elapsedSeconds: snapshot.elapsedSeconds,
+    });
+    persistVisitState(snapshot);
+  },
 
   // Computed
   saleSubtotal: () => get().saleLines.reduce((sum, l) => sum + l.price * l.qty, 0),

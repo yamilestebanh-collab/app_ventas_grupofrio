@@ -45,6 +45,9 @@ export interface GFStop {
   route_sequence?: number;
   source_model: 'gf.route.stop';
   // Enriched client-side (not from API):
+  _entityType?: 'customer' | 'lead';
+  _isOffroute?: boolean;
+  _leadId?: number | null;
   _koldScore?: KoldScoreData | null;
   _koldForecast?: KoldForecastData | null;
   _distanceMeters?: number;

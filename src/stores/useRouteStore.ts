@@ -26,7 +26,11 @@ interface RouteState {
   // Actions
   loadPlan: () => Promise<void>;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
-  addVirtualStop: (customerId: number, customerName: string) => number;
+  addVirtualStop: (
+    customerId: number,
+    customerName: string,
+    opts?: { entityType?: 'customer' | 'lead'; leadId?: number | null },
+  ) => number;
   reset: () => void;
 }
 
@@ -106,7 +110,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
    * Uses negative IDs to distinguish from real backend stops.
    * Returns the virtual stop ID for navigation.
    */
-  addVirtualStop: (customerId, customerName) => {
+  addVirtualStop: (customerId, customerName, opts) => {
     const virtualId = -(Date.now() % 1000000); // negative to avoid collision
     const virtualStop: GFStop = {
       id: virtualId,
@@ -115,6 +119,9 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       state: 'pending',
       source_model: 'gf.route.stop',
       route_sequence: 999,
+      _entityType: opts?.entityType ?? 'customer',
+      _isOffroute: true,
+      _leadId: opts?.leadId ?? null,
     };
     const stops = [...get().stops, virtualStop];
     set({ stops, stopsTotal: stops.length });

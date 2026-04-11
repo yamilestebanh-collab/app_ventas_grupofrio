@@ -1,14 +1,14 @@
 /**
- * BLD-20260408-P0: Off-route sale screen.
- * Allows searching for customers not in today's plan and initiating a sale.
+ * BLD-20260408-P0: Off-route special visit screen.
+ * Allows searching for customers or leads not in today's plan.
  *
  * Flow:
- * 1. Driver searches for customer by name
- * 2. Selects customer from results
+ * 1. Driver searches by name / phone / RFC / email
+ * 2. Selects a customer or lead from results
  * 3. Virtual stop is created in route store
- * 4. Navigates to standard sale screen with virtualStopId
+ * 4. Customers route to sale; leads route to prospection
  *
- * Uses odooRead to search res.partner.
+ * Uses authenticated Odoo RPC to search res.partner + crm.lead.
  */
 
 import React, { useState, useCallback } from 'react';
@@ -21,33 +21,19 @@ import { useRouter } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography } from '../src/theme/typography';
-import { odooRead } from '../src/services/odooRpc';
 import { useRouteStore } from '../src/stores/useRouteStore';
-import { useAuthStore } from '../src/stores/useAuthStore';
 import { useVisitStore } from '../src/stores/useVisitStore';
 import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
-
-interface CustomerResult {
-  id: number;
-  name: string;
-  street?: string;
-  city?: string;
-  phone?: string;
-  mobile?: string;
-  vat?: string;
-}
-
-const CUSTOMER_FIELDS = ['id', 'name', 'street', 'city', 'phone', 'mobile', 'vat'];
+import { OffrouteSearchResult, searchOffrouteEntities } from '../src/services/offrouteSearch';
 
 export default function OffRouteScreen() {
   const router = useRouter();
   const [search, setSearch] = useState('');
-  const [results, setResults] = useState<CustomerResult[]>([]);
+  const [results, setResults] = useState<OffrouteSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const addVirtualStop = useRouteStore((s) => s.addVirtualStop);
-  const customerIds = useAuthStore((s) => s.customerIds);
-  const allowFreeVisitsMode = useAuthStore((s) => s.allowFreeVisitsMode);
+  const updateStopState = useRouteStore((s) => s.updateStopState);
 
   const doSearch = useCallback(async () => {
     const q = search.trim();
@@ -59,27 +45,11 @@ export default function OffRouteScreen() {
     setIsSearching(true);
     setHasSearched(true);
     try {
-      // Search by name (ilike) — also try phone and vat
-      const domain: unknown[] = [
-        '&',
-        ['customer_rank', '>', 0],
-        '|', '|',
-        ['name', 'ilike', q],
-        ['phone', 'ilike', q],
-        ['vat', 'ilike', q],
-      ];
-
-      const customers = await odooRead<CustomerResult>(
-        'res.partner',
-        domain,
-        CUSTOMER_FIELDS,
-        30,
-      );
-
-      setResults(customers);
+      const searchResults = await searchOffrouteEntities(q);
+      setResults(searchResults);
     } catch (error) {
       console.warn('[offroute] Search failed:', error);
-      Alert.alert('Error', 'No se pudo buscar clientes. Verifica tu conexion.');
+      Alert.alert('Error', 'No se pudo buscar clientes o leads. Verifica tu conexion.');
     } finally {
       setIsSearching(false);
     }
@@ -91,9 +61,13 @@ export default function OffRouteScreen() {
   }, [doSearch, hasSearched, search]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshSearch);
 
-  function handleSelect(customer: CustomerResult) {
-    // Create a virtual stop and navigate to the sale screen
-    const virtualStopId = addVirtualStop(customer.id, customer.name);
+  function handleSelect(result: OffrouteSearchResult) {
+    const virtualStopId = addVirtualStop(
+      result.partnerId ?? result.id,
+      result.name,
+      { entityType: result.entityType, leadId: result.entityType === 'lead' ? result.id : null },
+    );
+    updateStopState(virtualStopId, 'in_progress');
 
     // Start a visit for this virtual stop
     const visitStore = useVisitStore.getState();
@@ -101,21 +75,27 @@ export default function OffRouteScreen() {
     visitStore.startVisit(
       {
         id: virtualStopId,
-        customer_id: customer.id,
-        customer_name: customer.name,
+        customer_id: result.partnerId ?? result.id,
+        customer_name: result.name,
         state: 'in_progress',
         source_model: 'gf.route.stop',
+        _entityType: result.entityType,
+        _isOffroute: true,
+        _leadId: result.entityType === 'lead' ? result.id : null,
       },
       0, 0, // lat/lon — GPS will provide real values if available
     );
 
-    // Navigate to sale screen with virtualStopId
+    if (result.entityType === 'lead') {
+      router.push(`/postvisit/${virtualStopId}` as never);
+      return;
+    }
+
     router.push(`/sale/${virtualStopId}` as never);
   }
 
-  function renderCustomer({ item }: { item: CustomerResult }) {
-    const subtitle = [item.street, item.city].filter(Boolean).join(', ');
-    const contact = item.phone || item.mobile || '';
+  function renderCustomer({ item }: { item: OffrouteSearchResult }) {
+    const badgeLabel = item.entityType === 'lead' ? 'Lead' : 'Cliente';
 
     return (
       <TouchableOpacity
@@ -125,28 +105,36 @@ export default function OffRouteScreen() {
       >
         <View style={{ flex: 1 }}>
           <Text style={styles.customerName} numberOfLines={1}>{item.name}</Text>
-          {subtitle ? (
-            <Text style={styles.customerSubtitle} numberOfLines={1}>{subtitle}</Text>
+          {item.subtitle ? (
+            <Text style={styles.customerSubtitle} numberOfLines={1}>{item.subtitle}</Text>
           ) : null}
-          {contact ? (
-            <Text style={styles.customerContact}>{contact}</Text>
+          {item.contact ? (
+            <Text style={styles.customerContact}>{item.contact}</Text>
           ) : null}
         </View>
-        <Text style={styles.selectArrow}>{'>'}</Text>
+        <View style={styles.resultMeta}>
+          <Text style={[
+            styles.typeBadge,
+            item.entityType === 'lead' ? styles.typeBadgeLead : styles.typeBadgeCustomer,
+          ]}>
+            {badgeLabel}
+          </Text>
+          <Text style={styles.selectArrow}>{'>'}</Text>
+        </View>
       </TouchableOpacity>
     );
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <TopBar title="Venta Fuera de Ruta" showBack />
+      <TopBar title="Visita Especial" showBack />
 
       <View style={styles.content}>
         {/* Search bar */}
         <View style={styles.searchRow}>
           <TextInput
             style={styles.searchInput}
-            placeholder="Buscar cliente por nombre, telefono o RFC..."
+            placeholder="Buscar cliente o lead por nombre, teléfono, RFC o correo..."
             placeholderTextColor={colors.textDim}
             value={search}
             onChangeText={setSearch}
@@ -168,7 +156,7 @@ export default function OffRouteScreen() {
 
         {/* Info */}
         <Text style={styles.infoText}>
-          Busca un cliente que no este en tu ruta de hoy para registrar una venta.
+          Busca clientes o leads fuera de tu ruta. Cliente abre venta; lead abre prospección.
         </Text>
 
         {/* Results */}
@@ -198,7 +186,7 @@ export default function OffRouteScreen() {
                     Sin resultados para "{search}"
                   </Text>
                   <Text style={[typography.dim, { fontSize: 11, marginTop: 4 }]}>
-                    Verifica el nombre o prueba con telefono/RFC
+                    Verifica el nombre o prueba con telefono, RFC o correo
                   </Text>
                 </View>
               ) : null
@@ -242,6 +230,23 @@ const styles = StyleSheet.create({
   customerName: { fontSize: 14, fontWeight: '700', color: colors.text },
   customerSubtitle: { fontSize: 12, color: colors.textDim, marginTop: 2 },
   customerContact: { fontSize: 11, color: colors.primary, marginTop: 2 },
+  resultMeta: { alignItems: 'flex-end', gap: 8, marginLeft: 8 },
+  typeBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: '700',
+    overflow: 'hidden',
+  },
+  typeBadgeCustomer: {
+    backgroundColor: colors.primaryAlpha12,
+    color: colors.primary,
+  },
+  typeBadgeLead: {
+    backgroundColor: 'rgba(245, 158, 11, 0.16)',
+    color: '#B45309',
+  },
   selectArrow: { fontSize: 18, color: colors.textDim, marginLeft: 8 },
   emptyCard: {
     backgroundColor: colors.card, borderRadius: radii.card,

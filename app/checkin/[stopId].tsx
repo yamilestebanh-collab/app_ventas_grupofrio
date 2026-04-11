@@ -22,6 +22,7 @@ import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatElapsed } from '../../src/utils/time';
 import { checkIn } from '../../src/services/gfLogistics';
 import { initializeGPS, getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
+import { deriveVisitGuard } from '../../src/services/visitGuards';
 
 const GEOFENCE_RADIUS_M = 50;
 
@@ -33,7 +34,7 @@ export default function CheckinScreen() {
   const stop = stops.find((s) => s.id === Number(stopId));
 
   const {
-    phase, checkInTime, elapsedSeconds,
+    phase, currentStopId, checkInTime, elapsedSeconds,
     startVisit, tickTimer,
   } = useVisitStore();
 
@@ -46,18 +47,19 @@ export default function CheckinScreen() {
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
   const allowOffDistanceVisits = useAuthStore((s) => s.allowOffDistanceVisits);
+  const activeVisitForStop = currentStopId === Number(stopId)
+    && (phase === 'checked_in' || phase === 'selling' || phase === 'no_selling');
 
   const [gpsLoading, setGpsLoading] = useState(true);
-  const [checkedIn, setCheckedIn] = useState(phase === 'checked_in' || phase === 'selling' || phase === 'no_selling');
   const [checkingIn, setCheckingIn] = useState(false); // Prevent double-tap
 
   // Timer tick
   useEffect(() => {
-    if (checkedIn) {
+    if (activeVisitForStop) {
       const interval = setInterval(() => tickTimer(), 1000);
       return () => clearInterval(interval);
     }
-  }, [checkedIn]);
+  }, [activeVisitForStop]);
 
   // Get GPS and set target on mount
   useEffect(() => {
@@ -92,6 +94,20 @@ export default function CheckinScreen() {
   // Check-in handler — only if geofence OK
   async function handleCheckIn() {
     if (!stop || checkingIn) return; // Guard: prevent double-tap
+    const visitGuard = deriveVisitGuard({
+      stopState: stop.state,
+      stopId: stop.id,
+      currentStopId,
+      phase,
+    });
+    if (!visitGuard.canStartVisit) {
+      if (visitGuard.isCompletedStop) {
+        Alert.alert('Visita cerrada', 'Esta parada ya no permite iniciar una visita nueva.');
+      } else if (visitGuard.hasAnotherActiveVisit) {
+        Alert.alert('Visita activa', 'Primero termina la visita que ya está en curso.');
+      }
+      return;
+    }
     if (!allowOffDistanceVisits && !isWithinFence && stop.customer_latitude && stop.customer_longitude) {
       Alert.alert(
         'Fuera de rango',
@@ -109,7 +125,6 @@ export default function CheckinScreen() {
     try {
       startVisit(stop, lat, lon);
       updateStopState(stop.id, 'in_progress');
-      setCheckedIn(true);
 
       // V2: Switch GPS to visit mode (stops periodic tracking, saves battery)
       setGpsMode('in_visit');
@@ -134,10 +149,7 @@ export default function CheckinScreen() {
         longitude: lon,
         timestamp: Date.now(),
       });
-      if (!checkedIn) {
-        // Only reset lock if the visit didn't start (pre-startVisit failure)
-        setCheckingIn(false);
-      }
+      setCheckingIn(false);
     }
     // checkingIn stays true after success — screen transitions to post-checkin state
   }
@@ -153,11 +165,21 @@ export default function CheckinScreen() {
     );
   }
 
+  const visitGuard = deriveVisitGuard({
+    stopState: stop.state,
+    stopId: stop.id,
+    currentStopId,
+    phase,
+  });
+  const checkedIn = activeVisitForStop;
+
   // Determine if customer has coordinates
   const hasCustomerCoords = !!(stop.customer_latitude && stop.customer_longitude);
   const canSkipGeofence = allowOffDistanceVisits && hasCustomerCoords;
   // Can check-in: GPS ready + within fence, no coords, or explicit employee bypass.
-  const canCheckIn = !gpsLoading && (isWithinFence || !hasCustomerCoords || canSkipGeofence);
+  const canCheckIn = visitGuard.canStartVisit
+    && !gpsLoading
+    && (isWithinFence || !hasCustomerCoords || canSkipGeofence);
 
   // GPS status display
   const gpsStatusInfo = (() => {
@@ -236,7 +258,9 @@ export default function CheckinScreen() {
           {/* Check-in button */}
           <Button
             label={
-              gpsLoading
+              !visitGuard.canStartVisit
+                ? visitGuard.primaryActionLabel
+                : gpsLoading
                 ? 'Obteniendo GPS...'
                 : canCheckIn
                   ? canSkipGeofence && !isWithinFence

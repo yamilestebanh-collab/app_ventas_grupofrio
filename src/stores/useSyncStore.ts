@@ -36,6 +36,7 @@ import {
   photoCounters,
 } from '../services/camera';
 import { checkIn, checkOut, reportIncident, uploadStopImage } from '../services/gfLogistics';
+import { CheckoutResultStatus } from '../services/checkoutResult';
 import { useProductStore } from './useProductStore';
 import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
@@ -742,6 +743,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
         payload.stop_id as number,
         payload.latitude as number,
         payload.longitude as number,
+        payload.result_status as CheckoutResultStatus,
         meta,
       );
       break;
@@ -799,9 +801,10 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
 
     case 'prospection':
       if (payload.model) {
+        const method = (payload.method as 'create' | 'write') || 'create';
         await postRpc('/api/create_update', {
           model: payload.model as string,
-          method: 'create',
+          method,
           dict: payload,
         });
       }

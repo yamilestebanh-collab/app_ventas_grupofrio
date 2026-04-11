@@ -18,6 +18,7 @@ import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatElapsed, formatCurrency } from '../../src/utils/time';
 import { checkOut } from '../../src/services/gfLogistics';
+import { buildCheckoutPayload } from '../../src/services/checkoutResult';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 
@@ -30,7 +31,7 @@ export default function CheckoutScreen() {
 
   const {
     elapsedSeconds, saleTotal, saleTotalKg, salePhotoTaken,
-    checkInLat, checkInLon, resetVisit,
+    checkInLat, checkInLon, noSaleReasonId, resetVisit,
   } = useVisitStore();
 
   const latitude = useLocationStore((s) => s.latitude);
@@ -60,28 +61,37 @@ export default function CheckoutScreen() {
   const totalKg = saleTotalKg();
 
   async function handleCheckout() {
+    if (!stop) return;
     if (checkingOut) return; // Guard: prevent double-tap
     setCheckingOut(true);
 
     const lat = latitude || 0;
     const lon = longitude || 0;
+    const checkoutPayload = buildCheckoutPayload({
+      stopId: stop.id,
+      latitude: lat,
+      longitude: lon,
+      saleTotal: total,
+      noSaleReasonId,
+    });
 
     try {
       if (isOnline) {
-        await checkOut(stop!.id, lat, lon);
+        await checkOut(
+          checkoutPayload.stop_id,
+          checkoutPayload.latitude,
+          checkoutPayload.longitude,
+          checkoutPayload.result_status,
+        );
       } else {
         enqueue('checkout', {
-          stop_id: stop!.id,
-          latitude: lat,
-          longitude: lon,
+          ...checkoutPayload,
           timestamp: Date.now(),
         });
       }
     } catch {
       enqueue('checkout', {
-        stop_id: stop!.id,
-        latitude: lat,
-        longitude: lon,
+        ...checkoutPayload,
         timestamp: Date.now(),
       });
     }

@@ -11,6 +11,7 @@ import { Badge } from '../ui/Badge';
 import { ScoreRing } from '../ui/ScoreRing';
 import { colors, radii, stopStateColors } from '../../theme/tokens';
 import { typography } from '../../theme/typography';
+import { getStopTypeLabel } from '../../services/routePresentation';
 
 interface StopCardProps {
   stop: GFStop;
@@ -41,6 +42,7 @@ export function StopCard({ stop, index }: StopCardProps) {
   const router = useRouter();
   const borderColor = stopStateColors[stop.state] || colors.textDim;
   const isDone = ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(stop.state);
+  const stopTypeLabel = getStopTypeLabel(stop);
 
   return (
     <TouchableOpacity
@@ -71,6 +73,12 @@ export function StopCard({ stop, index }: StopCardProps) {
               <Badge
                 label={stop._geoFenceOk ? '📍 OK' : '📍 Lejos'}
                 variant={stop._geoFenceOk ? 'green' : 'red'}
+              />
+            )}
+            {stopTypeLabel && (
+              <Badge
+                label={stopTypeLabel}
+                variant={stop._entityType === 'lead' ? 'orange' : 'dim'}
               />
             )}
           </View>
