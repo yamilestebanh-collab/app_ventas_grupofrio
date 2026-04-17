@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -23,6 +23,9 @@ import { formatElapsed } from '../../src/utils/time';
 import { checkIn } from '../../src/services/gfLogistics';
 import { initializeGPS, getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
+import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+import { getLeadActionVisibility } from '../../src/services/leadVisit';
 
 const GEOFENCE_RADIUS_M = 50;
 
@@ -121,19 +124,12 @@ export default function CheckinScreen() {
 
     const lat = latitude || 0;
     const lon = longitude || 0;
-
-    try {
+    const startLocalVisit = (queueForSync: boolean) => {
       startVisit(stop, lat, lon);
       updateStopState(stop.id, 'in_progress');
-
-      // V2: Switch GPS to visit mode (stops periodic tracking, saves battery)
       setGpsMode('in_visit');
-      // Capture a single GPS point tagged as check-in (fire-and-forget)
       captureAndEnqueueGpsPoint('checkin').catch(() => {});
-
-      if (isOnline) {
-        await checkIn(stop.id, lat, lon);
-      } else {
+      if (queueForSync) {
         enqueue('checkin', {
           stop_id: stop.id,
           latitude: lat,
@@ -141,17 +137,49 @@ export default function CheckinScreen() {
           timestamp: Date.now(),
         });
       }
-    } catch {
-      // Server failed — enqueue for retry, keep visit started locally
-      enqueue('checkin', {
-        stop_id: stop.id,
-        latitude: lat,
-        longitude: lon,
-        timestamp: Date.now(),
-      });
+    };
+
+    if (!isOnline) {
+      startLocalVisit(true);
+      return;
+    }
+
+    try {
+      await checkIn(stop.id, lat, lon);
+      startLocalVisit(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo realizar el check-in.';
+      if (isRetryableSyncErrorMessage(message)) {
+        startLocalVisit(true);
+        Alert.alert(
+          'Check-in pendiente',
+          'No se pudo confirmar con el servidor. La visita quedo pendiente de sincronizacion.',
+        );
+        return;
+      }
+
+      Alert.alert('Check-in rechazado', message);
       setCheckingIn(false);
     }
     // checkingIn stays true after success — screen transitions to post-checkin state
+  }
+
+  function handleOpenLocation() {
+    const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
+    if (!primaryUrl) {
+      Alert.alert('Sin ubicación', 'Esta parada no tiene ubicación disponible.');
+      return;
+    }
+
+    Linking.openURL(primaryUrl).catch(() => {
+      if (fallbackUrl) {
+        Linking.openURL(fallbackUrl).catch(() => {
+          Alert.alert('Error', 'No se pudo abrir la ubicación.');
+        });
+        return;
+      }
+      Alert.alert('Error', 'No se pudo abrir la ubicación.');
+    });
   }
 
   if (!stop) {
@@ -172,6 +200,8 @@ export default function CheckinScreen() {
     phase,
   });
   const checkedIn = activeVisitForStop;
+  const actionVisibility = getLeadActionVisibility(stop);
+  const showCollect = stop._entityType !== 'lead';
 
   // Determine if customer has coordinates
   const hasCustomerCoords = !!(stop.customer_latitude && stop.customer_longitude);
@@ -331,40 +361,55 @@ export default function CheckinScreen() {
 
         {/* Action grid 2x3 */}
         <View style={styles.actionGrid}>
-          <TouchableOpacity
-            style={[styles.actionBtn, styles.actionPrimary]}
-            onPress={() => router.push(`/sale/${stop.id}` as never)}
-          >
-            <Text style={styles.actionIcon}>🧾</Text>
-            <Text style={styles.actionLabel}>Hacer Venta</Text>
-          </TouchableOpacity>
+          {actionVisibility.showSale ? (
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.actionPrimary]}
+              onPress={() => router.push(`/sale/${stop.id}` as never)}
+            >
+              <Text style={styles.actionIcon}>🧾</Text>
+              <Text style={styles.actionLabel}>Hacer Venta</Text>
+            </TouchableOpacity>
+          ) : null}
 
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => router.push(`/nosale/${stop.id}` as never)}
-          >
-            <Text style={styles.actionIcon}>✕</Text>
-            <Text style={styles.actionLabel}>No Venta</Text>
-          </TouchableOpacity>
+          {actionVisibility.showNoSale ? (
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => router.push(`/nosale/${stop.id}` as never)}
+            >
+              <Text style={styles.actionIcon}>✕</Text>
+              <Text style={styles.actionLabel}>No Venta</Text>
+            </TouchableOpacity>
+          ) : null}
 
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => router.push(`/postvisit/${stop.id}` as never)}
-          >
-            <Text style={styles.actionIcon}>📋</Text>
-            <Text style={styles.actionLabel}>Prospección</Text>
-          </TouchableOpacity>
+          {actionVisibility.showData ? (
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => router.push(`/postvisit/${stop.id}` as never)}
+            >
+              <Text style={styles.actionIcon}>📋</Text>
+              <Text style={styles.actionLabel}>Datos</Text>
+            </TouchableOpacity>
+          ) : null}
 
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => {
-              if (stop) router.push(`/collect/${stop.customer_id}` as never);
-            }}
-          >
-            <Text style={styles.actionIcon}>💰</Text>
-            <Text style={styles.actionLabel}>Cobrar</Text>
-          </TouchableOpacity>
+          {showCollect ? (
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => {
+                if (stop) router.push(`/collect/${stop.customer_id}` as never);
+              }}
+            >
+              <Text style={styles.actionIcon}>💰</Text>
+              <Text style={styles.actionLabel}>Cobrar</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
+
+        <Button
+          label="📍 Abrir ubicación"
+          variant="secondary"
+          onPress={handleOpenLocation}
+          fullWidth
+        />
 
         {/* Quick context card */}
         <Text style={styles.sectionTitle}>CONTEXTO RAPIDO</Text>

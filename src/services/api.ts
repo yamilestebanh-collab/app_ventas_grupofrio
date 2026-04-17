@@ -6,6 +6,9 @@
 
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import { logError, logInfo } from '../utils/logger';
+import { buildHttpTraceData } from '../utils/httpDebug';
+import { unwrapRestResult } from '../utils/apiResult';
 
 const STORE_KEYS = {
   BASE_URL: 'kf_base_url',
@@ -28,6 +31,16 @@ function safeParseJson(text: string): any {
   } catch {
     return { raw: text.slice(0, 200) };
   }
+}
+
+function makeRequestId(): string {
+  return `http-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function makeLoggedHttpError(message: string): Error & { __alreadyLogged: true } {
+  const error = new Error(message) as Error & { __alreadyLogged: true };
+  error.__alreadyLogged = true;
+  return error;
 }
 
 async function buildAbsoluteUrl(url: string): Promise<string> {
@@ -145,21 +158,81 @@ export async function postRest<T = any>(
   url: string,
   data: Record<string, unknown> = {}
 ): Promise<T> {
-  const response = await fetch(await buildAbsoluteUrl(url), {
+  const absoluteUrl = await buildAbsoluteUrl(url);
+  const headers = await buildHeaders();
+  const requestId = makeRequestId();
+  const startedAt = Date.now();
+
+  logInfo('api', 'http_request', buildHttpTraceData({
+    phase: 'request',
+    channel: 'rest',
     method: 'POST',
-    headers: await buildHeaders(),
-    body: JSON.stringify(data),
-  });
+    url: absoluteUrl,
+    requestId,
+    requestHeaders: headers,
+    requestBody: data,
+  }));
 
-  const text = await response.text();
-  const parsed = safeParseJson(text);
-  if (!response.ok) {
-    const msg = parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`;
-    throw new Error(msg);
+  try {
+    const response = await fetch(absoluteUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+    });
+
+    const text = await response.text();
+    const parsed = safeParseJson(text);
+    let resultPayload: T | undefined;
+    const durationMs = Date.now() - startedAt;
+    let errorMessage: string | undefined;
+
+    try {
+      resultPayload = unwrapRestResult(parsed, response.status) as T;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    const trace = buildHttpTraceData({
+      phase: response.ok && !errorMessage ? 'response' : 'error',
+      channel: 'rest',
+      method: 'POST',
+      url: absoluteUrl,
+      requestId,
+      status: response.status,
+      durationMs,
+      responseBody: parsed,
+      errorMessage: errorMessage || (
+        response.ok
+          ? undefined
+          : (parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`)
+      ),
+    });
+
+    if (response.ok && !errorMessage) {
+      logInfo('api', 'http_response', trace);
+    } else {
+      logError('api', 'http_error', trace);
+      const msg = errorMessage || parsed?.error?.data?.message || parsed?.message || `HTTP ${response.status}`;
+      throw makeLoggedHttpError(msg);
+    }
+
+    return resultPayload as T;
+  } catch (error) {
+    if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    logError('api', 'http_error', buildHttpTraceData({
+      phase: 'error',
+      channel: 'rest',
+      method: 'POST',
+      url: absoluteUrl,
+      requestId,
+      durationMs: Date.now() - startedAt,
+      errorMessage: message,
+    }));
+    throw error;
   }
-
-  // gf_logistics_ops REST endpoints may return data directly or in .result
-  return (parsed?.result ?? parsed) as T;
 }
 
 /**
@@ -171,26 +244,74 @@ export async function postRpc<T = any>(
   url: string,
   params: Record<string, unknown> = {}
 ): Promise<T> {
-  const response = await fetch(await buildAbsoluteUrl(url), {
-    method: 'POST',
-    headers: await buildHeaders(),
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      params,
-    }),
-  });
+  const absoluteUrl = await buildAbsoluteUrl(url);
+  const headers = await buildHeaders();
+  const requestId = makeRequestId();
+  const requestBody = {
+    jsonrpc: '2.0',
+    params,
+  };
+  const startedAt = Date.now();
 
-  const text = await response.text();
-  const parsed = safeParseJson(text);
-  if (!response.ok) {
-    const errMsg = parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`;
-    throw new Error(errMsg);
+  logInfo('api', 'http_request', buildHttpTraceData({
+    phase: 'request',
+    channel: 'rpc',
+    method: 'POST',
+    url: absoluteUrl,
+    requestId,
+    requestHeaders: headers,
+    requestBody,
+  }));
+
+  try {
+    const response = await fetch(absoluteUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+    });
+
+    const text = await response.text();
+    const parsed = safeParseJson(text);
+    const durationMs = Date.now() - startedAt;
+    const errMsg = !response.ok
+      ? (parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`)
+      : (parsed?.error?.data?.message || parsed?.error?.message);
+
+    const trace = buildHttpTraceData({
+      phase: errMsg ? 'error' : 'response',
+      channel: 'rpc',
+      method: 'POST',
+      url: absoluteUrl,
+      requestId,
+      status: response.status,
+      durationMs,
+      responseBody: parsed,
+      errorMessage: errMsg,
+    });
+
+    if (errMsg) {
+      logError('api', 'http_error', trace);
+      throw makeLoggedHttpError(errMsg);
+    }
+
+    logInfo('api', 'http_response', trace);
+    return parsed?.result as T;
+  } catch (error) {
+    if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    logError('api', 'http_error', buildHttpTraceData({
+      phase: 'error',
+      channel: 'rpc',
+      method: 'POST',
+      url: absoluteUrl,
+      requestId,
+      durationMs: Date.now() - startedAt,
+      errorMessage: message,
+    }));
+    throw error;
   }
-  if (parsed?.error) {
-    const errMsg = parsed.error?.data?.message || parsed.error?.message || 'Odoo RPC error';
-    throw new Error(errMsg);
-  }
-  return parsed?.result as T;
 }
 
 /**
@@ -200,25 +321,73 @@ export async function postJsonRpc<T = any>(
   url: string,
   params: Record<string, unknown> = {}
 ): Promise<T> {
-  const response = await fetch(await buildAbsoluteUrl(url), {
-    method: 'POST',
-    headers: await buildHeaders(),
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'call',
-      params,
-    }),
-  });
+  const absoluteUrl = await buildAbsoluteUrl(url);
+  const headers = await buildHeaders();
+  const requestId = makeRequestId();
+  const requestBody = {
+    jsonrpc: '2.0',
+    method: 'call',
+    params,
+  };
+  const startedAt = Date.now();
 
-  const text = await response.text();
-  const parsed = safeParseJson(text);
-  if (!response.ok) {
-    const errMsg = parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`;
-    throw new Error(errMsg);
+  logInfo('api', 'http_request', buildHttpTraceData({
+    phase: 'request',
+    channel: 'jsonrpc',
+    method: 'POST',
+    url: absoluteUrl,
+    requestId,
+    requestHeaders: headers,
+    requestBody,
+  }));
+
+  try {
+    const response = await fetch(absoluteUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+    });
+
+    const text = await response.text();
+    const parsed = safeParseJson(text);
+    const durationMs = Date.now() - startedAt;
+    const errMsg = !response.ok
+      ? (parsed?.error?.data?.message || parsed?.error?.message || `HTTP ${response.status}`)
+      : (parsed?.error?.data?.message || parsed?.error?.message);
+
+    const trace = buildHttpTraceData({
+      phase: errMsg ? 'error' : 'response',
+      channel: 'jsonrpc',
+      method: 'POST',
+      url: absoluteUrl,
+      requestId,
+      status: response.status,
+      durationMs,
+      responseBody: parsed,
+      errorMessage: errMsg,
+    });
+
+    if (errMsg) {
+      logError('api', 'http_error', trace);
+      throw makeLoggedHttpError(errMsg);
+    }
+
+    logInfo('api', 'http_response', trace);
+    return parsed?.result as T;
+  } catch (error) {
+    if ((error as { __alreadyLogged?: boolean })?.__alreadyLogged) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    logError('api', 'http_error', buildHttpTraceData({
+      phase: 'error',
+      channel: 'jsonrpc',
+      method: 'POST',
+      url: absoluteUrl,
+      requestId,
+      durationMs: Date.now() - startedAt,
+      errorMessage: message,
+    }));
+    throw error;
   }
-  if (parsed?.error) {
-    const errMsg = parsed.error?.data?.message || parsed.error?.message || 'Odoo RPC error';
-    throw new Error(errMsg);
-  }
-  return parsed?.result as T;
 }

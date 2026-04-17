@@ -26,7 +26,7 @@ import {
   SYNC_PRIORITY_MAP,
 } from '../types/sync';
 import { storeSave, storeLoad, STORAGE_KEYS } from '../persistence/storage';
-import { postRpc, postRest } from '../services/api';
+import { postRpc } from '../services/api';
 import {
   readPhotoAsBase64,
   deletePhoto,
@@ -35,12 +35,22 @@ import {
   PHOTO_JANITOR_ENABLED,
   photoCounters,
 } from '../services/camera';
-import { checkIn, checkOut, reportIncident, uploadStopImage } from '../services/gfLogistics';
+import {
+  checkIn,
+  checkOut,
+  reportIncident,
+  uploadStopImage,
+  createSale,
+  createPayment,
+  upsertLeadData,
+} from '../services/gfLogistics';
 import { CheckoutResultStatus } from '../services/checkoutResult';
+import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
 import { useProductStore } from './useProductStore';
 import { makeClientEventMeta } from '../utils/clientEvent';
 import { pickGpsOverflowVictim, gpsBufferCounters } from '../utils/gpsBuffer';
 import { logInfo, logWarn, logError } from '../utils/logger';
+import { isRetryableSyncErrorMessage } from '../utils/syncFailure';
 
 // ═══ Constants ═══
 
@@ -90,7 +100,7 @@ interface SyncState {
   ) => string;
   markDone: (id: string) => void;
   markError: (id: string, message: string) => void;
-  markDead: (id: string, message: string) => void;
+  markDead: (id: string, message: string, retries?: number) => void;
   setOnline: (online: boolean) => void;
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
@@ -205,6 +215,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       })
       .catch(() => {});
 
+    // Auto-trigger queue processing when online (fire-and-forget).
+    // Without this, enqueued items only process on connectivity change
+    // or manual sync — causing sales/no-sales/checkouts to never reach Odoo.
+    if (get().isOnline && !get().isSyncing) {
+      setTimeout(() => get().processQueue(), 100);
+    }
+
     return id;
   },
 
@@ -245,10 +262,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     });
   },
 
-  markDead: (id, message) => {
+  markDead: (id, message, retries) => {
     const newQueue = get().queue.map((i) =>
       i.id === id
-        ? { ...i, status: 'dead' as SyncItemStatus, error_message: message }
+        ? {
+            ...i,
+            status: 'dead' as SyncItemStatus,
+            error_message: message,
+            retries: retries ?? i.retries,
+            next_retry_at: null,
+          }
         : i
     );
     set({ queue: newQueue, ...computeCounts(newQueue) });
@@ -471,16 +494,6 @@ async function processOneItem(
   set({ queue: updatedQueue });
 
   try {
-    // Sale duplicate check (legacy ±5min — KEPT until B.3)
-    if (item.type === 'sale_order') {
-      const isDuplicate = await checkSaleDuplicate(item);
-      if (isDuplicate) {
-        get().markDone(item.id);
-        logInfo('sync', 'duplicate_skipped', { id: item.id, type: item.type });
-        return true;
-      }
-    }
-
     await processSyncItem(item);
     get().markDone(item.id);
 
@@ -498,12 +511,17 @@ async function processOneItem(
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Sync error';
     const newRetries = item.retries + 1;
+    const shouldRetry = isRetryableSyncErrorMessage(msg);
 
-    if (newRetries >= MAX_RETRIES) {
-      get().markDead(item.id, msg);
+    if (!shouldRetry || newRetries >= MAX_RETRIES) {
+      get().markDead(item.id, msg, newRetries);
       rollbackFailedOperation(item);
       logError('sync', 'item_dead_rollback', {
-        id: item.id, type: item.type, retries: newRetries, error: msg,
+        id: item.id,
+        type: item.type,
+        retries: newRetries,
+        error: msg,
+        retryable: shouldRetry,
       });
     } else {
       get().markError(item.id, msg);
@@ -713,20 +731,11 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
 
   switch (type) {
     case 'sale_order':
-      await postRpc('/api/create_update', {
-        model: 'sale.order',
-        method: 'create',
-        dict: {
-          partner_id: payload.partner_id,
-          order_line: (payload.lines as any[])?.map((l: any) => [
-            0, 0, {
-              product_id: l.product_id,
-              product_uom_qty: l.qty,
-              price_unit: l.price_unit,
-            },
-          ]) || [],
-        },
-      });
+      // Migrated to gf_logistics_ops REST endpoint. The legacy JSON-RPC
+      // write required ACLs the driver user doesn't have and failed
+      // noisily. The REST endpoint also tolerates obsolete stop_id
+      // (treated as offroute server-side).
+      await createSale(buildSalesCreatePayload(payload as Record<string, unknown>), meta);
       break;
 
     case 'checkin':
@@ -758,16 +767,10 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       break;
 
     case 'payment':
-      await postRpc('/api/create_update', {
-        model: 'account.payment',
-        method: 'create',
-        dict: {
-          partner_id: payload.partner_id,
-          amount: payload.amount,
-          payment_type: 'inbound',
-          journal_id: payload.journal_id || null,
-        },
-      });
+      // Migrated to gf_logistics_ops REST endpoint. Same rationale as
+      // sale_order: the legacy JSON-RPC write needed ACLs the driver
+      // lacks.
+      await createPayment(buildPaymentsCreatePayload(payload as Record<string, unknown>), meta);
       break;
 
     case 'photo': {
@@ -800,14 +803,7 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
       break;
 
     case 'prospection':
-      if (payload.model) {
-        const method = (payload.method as 'create' | 'write') || 'create';
-        await postRpc('/api/create_update', {
-          model: payload.model as string,
-          method,
-          dict: payload,
-        });
-      }
+      await upsertLeadData(payload as Record<string, unknown>, meta);
       break;
 
     // V2 types — basic dispatchers. Payloads follow the same
@@ -871,10 +867,17 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
   switch (item.type) {
     case 'sale_order': {
       // Restore local stock for every line (add back deducted qty)
-      const lines = item.payload.lines as Array<{ product_id: number; qty: number }> | undefined;
+      const lines = item.payload.lines as Array<{
+        product_id: number;
+        qty?: number;
+        quantity?: number;
+      }> | undefined;
       if (lines && lines.length > 0) {
         lines.forEach((line) => {
-          updateLocalStock(line.product_id, line.qty); // positive = restore
+          const quantity = typeof line.quantity === 'number' ? line.quantity : line.qty;
+          if (typeof quantity === 'number' && quantity > 0) {
+            updateLocalStock(line.product_id, quantity); // positive = restore
+          }
         });
         logError('sync', 'rollback_sale', {
           id: item.id,
@@ -919,42 +922,6 @@ function rollbackFailedOperation(item: SyncQueueItem): void {
     default:
       break;
   }
-}
-
-// ═══ Legacy ±5min sale duplicate check (KEPT until B.3 server-side idempotency) ═══
-
-async function checkSaleDuplicate(item: SyncQueueItem): Promise<boolean> {
-  if (item.type !== 'sale_order') return false;
-
-  const opId = item.payload._operationId as string;
-  if (!opId) return false;
-
-  try {
-    const existing = await postRpc<any[]>('/get_records', {
-      model: 'sale.order',
-      domain: [
-        ['partner_id', '=', item.payload.partner_id],
-        ['create_date', '>=', new Date(item.created_at - 300000).toISOString()],
-        ['create_date', '<=', new Date(item.created_at + 300000).toISOString()],
-      ],
-      fields: ['id', 'name', 'amount_total'],
-      limit: 1,
-    });
-
-    if (existing && existing.length > 0) {
-      logWarn('sync', 'legacy_dedup_hit', {
-        id: item.id,
-        existing_order: existing[0].name,
-        opId,
-      });
-      return true;
-    }
-  } catch {
-    // If check fails, proceed with creation (better to risk duplicate than lose sale)
-    return false;
-  }
-
-  return false;
 }
 
 // ═══ Utility ═══

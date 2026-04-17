@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TextInput,
   TouchableOpacity,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -16,8 +17,15 @@ import { Button } from '../../src/components/ui/Button';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
+import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { buildPostvisitPayload } from '../../src/services/postvisitPayload';
+import { useAuthStore } from '../../src/stores/useAuthStore';
+import { fetchLeadStages, upsertLeadData } from '../../src/services/gfLogistics';
+import { applyLeadUpsertToStop, LeadStageOption } from '../../src/services/leadVisit';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+
+const DEFAULT_LEAD_COMPANY_ID = 34;
 
 const INTEREST_OPTIONS = [
   { value: 'high', label: 'Alto' },
@@ -34,7 +42,12 @@ export default function ProspeccionScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const stop = useRouteStore((s) => s.stops.find((item) => item.id === Number(stopId)));
+  const removeStop = useRouteStore((s) => s.removeStop);
+  const patchStop = useRouteStore((s) => s.patchStop);
   const enqueue = useSyncStore((s) => s.enqueue);
+  const isOnline = useSyncStore((s) => s.isOnline);
+  const resetVisit = useVisitStore((s) => s.resetVisit);
+  const companyId = useAuthStore((s) => s.companyId);
 
   const [contactName, setContactName] = useState('');
   const [phone, setPhone] = useState('');
@@ -43,13 +56,54 @@ export default function ProspeccionScreen() {
   const [freezer, setFreezer] = useState<'yes' | 'no'>('no');
   const [interestLevel, setInterestLevel] = useState<'high' | 'medium' | 'low'>('medium');
   const [notes, setNotes] = useState('');
+  const [stages, setStages] = useState<LeadStageOption[]>([]);
+  const [selectedStageId, setSelectedStageId] = useState<number | null>(null);
+  const [loadingStages, setLoadingStages] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [stageError, setStageError] = useState<string | null>(null);
 
   const isLead = stop?._entityType === 'lead';
-  const title = isLead ? 'Completar Lead' : 'Prospección';
+  const title = 'Datos';
+  const effectiveCompanyId = companyId ?? DEFAULT_LEAD_COMPANY_ID;
 
   const canSave = useMemo(() => {
-    return notes.trim().length > 0 || competitor.trim().length > 0 || contactName.trim().length > 0;
-  }, [notes, competitor, contactName]);
+    return selectedStageId != null;
+  }, [selectedStageId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      if (!isOnline) {
+        setLoadingStages(false);
+        setStageError('Conéctate para cargar las etapas.');
+        return;
+      }
+
+      setLoadingStages(true);
+      setStageError(null);
+      try {
+        const response = await fetchLeadStages(effectiveCompanyId);
+        if (cancelled) return;
+        const normalized = [...response].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+        setStages(normalized);
+        setSelectedStageId((prev) => prev ?? normalized[0]?.id ?? null);
+        if (normalized.length === 0) {
+          setStageError('No hay etapas disponibles para esta empresa.');
+        }
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : 'No se pudieron cargar las etapas.';
+        setStageError(message);
+      } finally {
+        if (!cancelled) setLoadingStages(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveCompanyId, isOnline]);
 
   if (!stop) {
     return (
@@ -64,11 +118,16 @@ export default function ProspeccionScreen() {
 
   const currentStop = stop;
 
-  function handleSave() {
+  function finalizeAfterSave() {
+    router.replace(`/checkin/${currentStop.id}` as never);
+  }
+
+  async function handleSave() {
     if (!canSave) {
-      Alert.alert('Faltan datos', 'Captura al menos contacto, competidor o notas.');
+      Alert.alert('Falta etapa', 'Selecciona la etapa a la que debe caer la oportunidad.');
       return;
     }
+    if (saving) return;
 
     const payload = buildPostvisitPayload({
       stop: currentStop,
@@ -81,25 +140,58 @@ export default function ProspeccionScreen() {
         interestLevel,
         notes,
       },
+      stageId: selectedStageId as number,
+      companyId: effectiveCompanyId,
     });
 
-    enqueue('prospection', {
-      ...payload,
-      timestamp: Date.now(),
-    });
+    if (!isOnline) {
+      enqueue('prospection', {
+        ...payload,
+        timestamp: Date.now(),
+      });
+      Alert.alert(
+        'Datos pendientes',
+        'No hay conexión. Los datos quedaron en cola y la venta se habilitará cuando el lead se sincronice.',
+        [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+      );
+      return;
+    }
 
-    Alert.alert(
-      'Prospección guardada',
-      isLead
-        ? 'La actualización del lead quedó en cola de sincronización.'
-        : 'La prospección quedó en cola de sincronización.',
-      [
-        {
-          text: 'Continuar visita',
-          onPress: () => router.replace(`/checkin/${currentStop.id}` as never),
-        },
-      ],
-    );
+    setSaving(true);
+    try {
+      const lead = await upsertLeadData(payload);
+      if (lead) {
+        const nextStop = applyLeadUpsertToStop(currentStop, lead as any);
+        patchStop(currentStop.id, nextStop);
+        const visitState = useVisitStore.getState();
+        if (visitState.currentStopId === currentStop.id && visitState.currentStop) {
+          useVisitStore.setState({ currentStop: nextStop });
+        }
+      }
+
+      Alert.alert(
+        'Datos guardados',
+        'La oportunidad quedó actualizada. Si ya se creó el contacto, la venta se habilitó en esta misma visita.',
+        [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo guardar la información.';
+      if (isRetryableSyncErrorMessage(message)) {
+        enqueue('prospection', {
+          ...payload,
+          timestamp: Date.now(),
+        });
+        Alert.alert(
+          'Datos pendientes',
+          'No se pudo confirmar con el servidor. Los datos quedaron en cola de sincronización.',
+          [{ text: 'Continuar visita', onPress: finalizeAfterSave }],
+        );
+      } else {
+        Alert.alert('Datos rechazados', message);
+      }
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -109,9 +201,36 @@ export default function ProspeccionScreen() {
         <Card>
           <Text style={styles.headerTitle}>{currentStop.customer_name}</Text>
           <Text style={styles.headerSubtitle}>
-            {isLead ? 'Actualiza la información comercial del lead.' : 'Registra información de prospección de la visita.'}
+            {isLead ? 'Actualiza la información comercial del lead u oportunidad.' : 'Registra información comercial de la visita.'}
           </Text>
         </Card>
+
+        <Text style={styles.inputLabel}>ETAPA</Text>
+        {loadingStages ? (
+          <View style={styles.loadingStageCard}>
+            <ActivityIndicator color={colors.primary} size="small" />
+            <Text style={styles.loadingStageText}>Cargando etapas...</Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.chipRow}>
+              {stages.map((stage) => (
+                <TouchableOpacity
+                  key={stage.id}
+                  style={[styles.chip, selectedStageId === stage.id && styles.chipSelected]}
+                  onPress={() => setSelectedStageId(stage.id)}
+                >
+                  <Text style={[styles.chipText, selectedStageId === stage.id && styles.chipTextSelected]}>
+                    {stage.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {stageError ? (
+              <Text style={styles.errorText}>{stageError}</Text>
+            ) : null}
+          </>
+        )}
 
         <Text style={styles.inputLabel}>CONTACTO</Text>
         <TextInput
@@ -194,10 +313,11 @@ export default function ProspeccionScreen() {
         />
 
         <Button
-          label={isLead ? 'Guardar Lead' : 'Guardar Prospección'}
-          onPress={handleSave}
+          label="Guardar Datos"
+          onPress={() => { void handleSave(); }}
           fullWidth
-          disabled={!canSave}
+          disabled={!canSave || saving || loadingStages}
+          loading={saving}
           style={{ marginTop: 16 }}
         />
       </ScrollView>
@@ -242,6 +362,21 @@ const styles = StyleSheet.create({
     minHeight: 110,
     textAlignVertical: 'top',
   },
+  loadingStageCard: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.button,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  loadingStageText: {
+    color: colors.textDim,
+    fontSize: 13,
+  },
   chipRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   chip: {
     paddingHorizontal: 14,
@@ -257,4 +392,9 @@ const styles = StyleSheet.create({
   },
   chipText: { color: colors.text, fontSize: 12, fontWeight: '600' },
   chipTextSelected: { color: colors.primary },
+  errorText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: colors.error,
+  },
 });

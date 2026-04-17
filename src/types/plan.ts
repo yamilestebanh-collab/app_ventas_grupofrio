@@ -37,6 +37,7 @@ export interface GFStop {
   id: OdooId;
   customer_id: number;
   customer_name: string;
+  partner_id?: [number, string] | number | false | null;
   customer_ref?: string;
   customer_latitude?: number;
   customer_longitude?: number;
@@ -48,6 +49,11 @@ export interface GFStop {
   _entityType?: 'customer' | 'lead';
   _isOffroute?: boolean;
   _leadId?: number | null;
+  _partnerId?: number | null;
+  // Milliseconds since epoch. Stamped by addVirtualStop() so a plan
+  // refresh can preserve in-flight offroute drafts without accumulating
+  // orphaned entries forever — see offrouteDrafts.ts for the TTL.
+  _virtualCreatedAt?: number;
   _koldScore?: KoldScoreData | null;
   _koldForecast?: KoldForecastData | null;
   _distanceMeters?: number;

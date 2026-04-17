@@ -9,7 +9,17 @@ import { getMyPlan, getPlanStops } from '../services/gfLogistics';
 // CROSS-STORE DEP: loads KOLD intelligence on route load. Documented in V1.3.1.
 import { useKoldStore } from './useKoldStore';
 import { useSyncStore } from './useSyncStore';
+import { useVisitStore } from './useVisitStore';
 import { storeSave, STORAGE_KEYS } from '../persistence/storage';
+import { shouldResetVisitAfterPlanRefresh } from '../services/visitPersistence';
+import { removeStopById } from '../services/routeStops';
+import {
+  mergeBackendStopsWithDrafts,
+  stampMissingCreatedAt,
+} from '../services/offrouteDrafts';
+import { logInfo } from '../utils/logger';
+import { visitTelemetryCounters } from '../utils/visitTelemetry';
+import { createVirtualStop } from '../services/virtualStopFactory';
 
 interface RouteState {
   plan: GFPlan | null;
@@ -26,11 +36,13 @@ interface RouteState {
   // Actions
   loadPlan: () => Promise<void>;
   updateStopState: (stopId: number, state: GFStop['state']) => void;
+  removeStop: (stopId: number) => void;
   addVirtualStop: (
     customerId: number,
     customerName: string,
-    opts?: { entityType?: 'customer' | 'lead'; leadId?: number | null },
+    opts?: { entityType?: 'customer' | 'lead'; leadId?: number | null; partnerId?: number | null },
   ) => number;
+  patchStop: (stopId: number, patch: Partial<GFStop>) => void;
   reset: () => void;
 }
 
@@ -55,13 +67,23 @@ export const useRouteStore = create<RouteState>((set, get) => ({
 
     set({ isLoading: true, error: null });
     try {
+      const visitStore = useVisitStore.getState();
       const plan = await getMyPlan();
       if (!plan) {
+        if (visitStore.currentStopId !== null) {
+          visitStore.resetVisit();
+        }
         set({ plan: null, stops: [], isLoading: false, error: 'Sin plan para hoy' });
         return;
       }
 
-      const rawStops = await getPlanStops(plan.plan_id);
+      const backendStops = await getPlanStops(plan.plan_id);
+
+      // Preserve in-flight offroute drafts across refresh. Without this
+      // merge, a backend refresh in the middle of an offroute sale would
+      // wipe the virtual stop the user is currently operating on.
+      // Stale drafts (TTL in offrouteDrafts.ts) are dropped here.
+      const rawStops = mergeBackendStopsWithDrafts(backendStops, get().stops);
 
       // F5: Load KOLD intelligence for all route partners
       const partnerIds = [...new Set(rawStops.map((s) => s.customer_id).filter(Boolean))];
@@ -85,6 +107,18 @@ export const useRouteStore = create<RouteState>((set, get) => ({
         ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(s.state)
       ).length;
       const total = stops.length;
+
+      if (shouldResetVisitAfterPlanRefresh(visitStore.currentStopId, stops)) {
+        // Telemetry: validates that the ghost-stop reconciliation is
+        // actually firing on real refreshes and not sitting unused.
+        visitTelemetryCounters.reconcileResetTotal += 1;
+        logInfo('visit', 'reconcile_reset', {
+          previousStopId: visitStore.currentStopId,
+          stopsLoaded: stops.length,
+          totalTriggers: visitTelemetryCounters.reconcileResetTotal,
+        });
+        visitStore.resetVisit();
+      }
 
       set({
         plan,
@@ -111,20 +145,18 @@ export const useRouteStore = create<RouteState>((set, get) => ({
    * Returns the virtual stop ID for navigation.
    */
   addVirtualStop: (customerId, customerName, opts) => {
-    const virtualId = -(Date.now() % 1000000); // negative to avoid collision
-    const virtualStop: GFStop = {
-      id: virtualId,
-      customer_id: customerId,
-      customer_name: customerName,
-      state: 'pending',
-      source_model: 'gf.route.stop',
-      route_sequence: 999,
-      _entityType: opts?.entityType ?? 'customer',
-      _isOffroute: true,
-      _leadId: opts?.leadId ?? null,
-    };
+    const virtualStop = createVirtualStop({
+      customerId,
+      customerName,
+      entityType: opts?.entityType,
+      leadId: opts?.leadId,
+      partnerId: opts?.partnerId,
+    });
+    const virtualId = virtualStop.id;
     const stops = [...get().stops, virtualStop];
     set({ stops, stopsTotal: stops.length });
+    // Persist immediately so a mid-flow crash can rehydrate the draft.
+    storeSave(STORAGE_KEYS.STOPS, stops);
     return virtualId;
   },
 
@@ -142,6 +174,29 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       progressPct: total > 0 ? Math.round((completed / total) * 100) : 0,
     });
     // F6: Persist updated stops
+    storeSave(STORAGE_KEYS.STOPS, stops);
+  },
+
+  removeStop: (stopId) => {
+    const stops = removeStopById(get().stops, stopId);
+    const completed = stops.filter((s) =>
+      ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(s.state)
+    ).length;
+    const total = stops.length;
+    set({
+      stops,
+      stopsCompleted: completed,
+      stopsTotal: total,
+      progressPct: total > 0 ? Math.round((completed / total) * 100) : 0,
+    });
+    storeSave(STORAGE_KEYS.STOPS, stops);
+  },
+
+  patchStop: (stopId, patch) => {
+    const stops = get().stops.map((stop) => (
+      stop.id === stopId ? { ...stop, ...patch } : stop
+    ));
+    set({ stops });
     storeSave(STORAGE_KEYS.STOPS, stops);
   },
 

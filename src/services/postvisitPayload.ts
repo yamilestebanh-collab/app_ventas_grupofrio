@@ -14,8 +14,10 @@ interface PostvisitFormValues {
 }
 
 interface BuildPostvisitPayloadInput {
-  stop: Pick<GFStop, 'customer_name' | '_entityType' | '_leadId'>;
+  stop: Pick<GFStop, 'id' | 'customer_name' | '_entityType' | '_leadId' | '_partnerId' | 'partner_id'>;
   form: PostvisitFormValues;
+  stageId: number;
+  companyId: number;
 }
 
 function mapInterestToPriority(level: InterestLevel): '1' | '2' | '3' {
@@ -33,29 +35,37 @@ function buildDescription(form: PostvisitFormValues): string {
   ].join('\n');
 }
 
-export function buildPostvisitPayload({ stop, form }: BuildPostvisitPayloadInput) {
-  const basePayload = {
-    model: 'crm.lead',
+function extractLeadPartnerId(
+  stop: Pick<GFStop, '_entityType' | '_partnerId' | 'partner_id'>,
+): number | null {
+  if (stop._entityType !== 'lead') return null;
+  if (typeof stop._partnerId === 'number' && stop._partnerId > 0) {
+    return stop._partnerId;
+  }
+  const value = stop.partner_id;
+  if (Array.isArray(value) && typeof value[0] === 'number' && value[0] > 0) {
+    return value[0];
+  }
+  if (typeof value === 'number' && value > 0) return value;
+  return null;
+}
+
+export function buildPostvisitPayload({ stop, form, stageId, companyId }: BuildPostvisitPayloadInput) {
+  return {
+    stop_id: stop.id,
+    lead_id: stop._entityType === 'lead' ? stop._leadId || null : null,
+    partner_id: extractLeadPartnerId(stop),
+    company_id: companyId,
+    customer_name: stop.customer_name,
+    stage_id: stageId,
     contact_name: form.contactName || undefined,
     phone: form.phone || undefined,
     email_from: form.email || undefined,
     priority: mapInterestToPriority(form.interestLevel),
+    competitor: form.competitor || undefined,
+    freezer: form.freezer,
+    interest_level: form.interestLevel,
+    notes: form.notes || undefined,
     description: buildDescription(form),
-  };
-
-  if (stop._entityType === 'lead' && stop._leadId) {
-    return {
-      ...basePayload,
-      method: 'write' as const,
-      id: stop._leadId,
-    };
-  }
-
-  return {
-    ...basePayload,
-    method: 'create' as const,
-    type: 'lead',
-    name: stop.customer_name,
-    partner_name: stop.customer_name,
   };
 }

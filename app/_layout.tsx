@@ -68,6 +68,7 @@ export default function RootLayout() {
             // These are used by odooRpc → sessionRpc to authenticate with
             // /web/dataset/call_kw, which requires a web session (not Api-Key).
             setServiceCredentials('direccion@grupofrio.mx', 'AbundanciaGrupoFrio2025.');
+            await useAuthStore.getState().ensureEmployeeAnalytics();
 
             // 2. Rehydrate other state (sync queue, route, products)
             console.log('[Init] Rehydrating app state...');
@@ -115,6 +116,7 @@ export default function RootLayout() {
     // (covers both fresh login and app restart)
     if (isAuthenticated) {
       setServiceCredentials('direccion@grupofrio.mx', 'AbundanciaGrupoFrio2025.');
+      void useAuthStore.getState().ensureEmployeeAnalytics();
     }
 
     if (!isAuthenticated && !inAuthGroup) {

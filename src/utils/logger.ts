@@ -5,13 +5,13 @@
  * in-memory ring buffer so production devices can be diagnosed via
  * the diagnostics export. Console output IS __DEV__-only.
  *
- * Categories: sync, gps, auth, inventory, visit, nav, health
+ * Categories: sync, gps, auth, inventory, visit, nav, health, api
  */
 
 import { storeSave, storeLoad } from '../persistence/storage';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-export type LogCategory = 'sync' | 'gps' | 'auth' | 'inventory' | 'visit' | 'nav' | 'health' | 'general';
+export type LogCategory = 'sync' | 'gps' | 'auth' | 'inventory' | 'visit' | 'nav' | 'health' | 'api' | 'general';
 
 export interface LogEntry {
   ts: string;         // ISO 8601
@@ -81,11 +81,8 @@ export function log(
 
   // Console output only in dev
   if (__DEV__) {
-    const prefix = `[${category}:${event}]`;
+    const prefix = `[${level}:${category}:${event}]`;
     switch (level) {
-      case 'error':
-        console.error(prefix, data ?? '');
-        break;
       case 'warn':
         console.warn(prefix, data ?? '');
         break;

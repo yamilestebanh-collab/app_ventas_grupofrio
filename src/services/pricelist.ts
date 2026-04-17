@@ -21,11 +21,35 @@
 import { odooRead, odooRpc } from './odooRpc';
 import { postRpc } from './api';
 import {
+  shouldTryServerPricingEndpoint,
+  disableServerPricingEndpointIfMissing,
+  markServerPricingEndpointAvailable,
+} from './serverPricingEndpoint';
+import {
   buildPartnerPricelistCandidates,
   computeRulePrice,
   extractMany2oneId,
   getPreferredPartnerPricelistId,
 } from './pricelistLogic';
+import {
+  DEFAULT_SALES_COMPANY_ID,
+  cacheResolvedPartnerPricelistId,
+  cacheCustomerPrices,
+  getEffectiveSalesCompanyId,
+  getCompanyFallbackPricelistId,
+  isPricelistCompatibleWithCompany,
+  peekResolvedPartnerPricelistId,
+  peekCachedCustomerPrices,
+} from './pricelistCache';
+
+export {
+  DEFAULT_SALES_COMPANY_ID,
+  getEffectiveSalesCompanyId,
+  peekCachedCustomerPrices,
+  getCompanyFallbackPricelistId,
+  isPricelistCompatibleWithCompany,
+  peekResolvedPartnerPricelistId,
+} from './pricelistCache';
 
 export interface PricelistItem {
   id: number;
@@ -68,11 +92,86 @@ interface PartnerPricelistResolution {
   candidatePartnerIds: number[];
   resolvedPartnerId: number | null;
   pricelistId: number | null;
-  source: 'partner_field' | 'ir.property' | 'get_records' | 'none';
+  source: 'partner_field' | 'ir.property' | 'get_records' | 'company_fallback' | 'none';
+}
+
+interface PricingOptions {
+  companyId?: number | null;
+  fallbackPricelistId?: number | null;
+}
+
+function resolveFallbackPricelistId(options?: PricingOptions): number | null {
+  if (typeof options?.fallbackPricelistId === 'number' && options.fallbackPricelistId > 0) {
+    return options.fallbackPricelistId;
+  }
+  return getCompanyFallbackPricelistId(getEffectiveSalesCompanyId(options?.companyId));
+}
+
+const partnerPricelistResolutionCache = new Map<string, PartnerPricelistResolution>();
+const pricelistItemsCache = new Map<number, PricelistItem[]>();
+const pricelistCompanyCache = new Map<number, number | null>();
+
+function buildPartnerResolutionCacheKey(partnerId: number, options?: PricingOptions): string {
+  return `${partnerId}|${resolveFallbackPricelistId(options) ?? 0}`;
 }
 
 function extractPricelistId(value: unknown): number | null {
   return extractMany2oneId(value);
+}
+
+async function loadPricelistCompanyId(pricelistId: number): Promise<number | null> {
+  if (pricelistCompanyCache.has(pricelistId)) {
+    return pricelistCompanyCache.get(pricelistId) ?? null;
+  }
+
+  try {
+    const rows = await odooRpc<Array<{ id: number; company_id?: [number, string] | number | false }>>(
+      'product.pricelist',
+      'read',
+      [[pricelistId]],
+      { fields: ['company_id'] },
+    );
+    const companyId = extractMany2oneId(rows?.[0]?.company_id);
+    pricelistCompanyCache.set(pricelistId, companyId);
+    return companyId;
+  } catch (err) {
+    console.warn(`[pricelist] read company_id failed for pricelist ${pricelistId}:`, err);
+  }
+
+  try {
+    const rows = await odooRead<{ company_id?: [number, string] | number | false }>(
+      'product.pricelist',
+      [['id', '=', pricelistId]],
+      ['company_id'],
+      1,
+    );
+    const companyId = extractMany2oneId(rows?.[0]?.company_id);
+    pricelistCompanyCache.set(pricelistId, companyId);
+    return companyId;
+  } catch (err) {
+    console.warn(`[pricelist] /get_records company_id failed for pricelist ${pricelistId}:`, err);
+  }
+
+  pricelistCompanyCache.set(pricelistId, null);
+  return null;
+}
+
+async function pickCompatiblePricelistId(
+  partnerId: number,
+  candidateId: number | null,
+  effectiveCompanyId: number,
+): Promise<number | null> {
+  if (!candidateId) return null;
+
+  const pricelistCompanyId = await loadPricelistCompanyId(candidateId);
+  if (isPricelistCompatibleWithCompany(pricelistCompanyId, effectiveCompanyId)) {
+    return candidateId;
+  }
+
+  console.warn(
+    `[pricelist] Ignoring pricelist ${candidateId} for partner ${partnerId} because company mismatch. Expected ${effectiveCompanyId}, got ${pricelistCompanyId}`,
+  );
+  return null;
 }
 
 async function readPartnersForPricelist(partnerIds: number[]): Promise<Map<number, PartnerPricelistRecord>> {
@@ -96,7 +195,14 @@ async function readPartnersForPricelist(partnerIds: number[]): Promise<Map<numbe
   return new Map((partners || []).map((partner) => [partner.id, partner]));
 }
 
-async function resolvePartnerPricelist(partnerId: number): Promise<PartnerPricelistResolution> {
+async function resolvePartnerPricelist(partnerId: number, options?: PricingOptions): Promise<PartnerPricelistResolution> {
+  const resolutionCacheKey = buildPartnerResolutionCacheKey(partnerId, options);
+  const cachedResolution = partnerPricelistResolutionCache.get(resolutionCacheKey);
+  if (cachedResolution) {
+    return cachedResolution;
+  }
+
+  const effectiveCompanyId = getEffectiveSalesCompanyId(options?.companyId);
   let candidatePartnerIds = [partnerId];
 
   try {
@@ -110,15 +216,23 @@ async function resolvePartnerPricelist(partnerId: number): Promise<PartnerPricel
 
       for (const candidateId of candidatePartnerIds) {
         const partner = candidatePartnersMap.get(candidateId);
-        const pricelistId = getPreferredPartnerPricelistId(partner);
+        const rawPricelistId = getPreferredPartnerPricelistId(partner);
+        const pricelistId = await pickCompatiblePricelistId(
+          candidateId,
+          rawPricelistId,
+          effectiveCompanyId,
+        );
         if (pricelistId) {
           console.log(`[pricelist] Partner ${candidateId} pricelist: ${pricelistId}`);
-          return {
+          const resolution: PartnerPricelistResolution = {
             candidatePartnerIds,
             resolvedPartnerId: candidateId,
             pricelistId,
             source: 'partner_field',
           };
+          cacheResolvedPartnerPricelistId(partnerId, pricelistId, options);
+          partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
+          return resolution;
         }
       }
     }
@@ -153,15 +267,21 @@ async function resolvePartnerPricelist(partnerId: number): Promise<PartnerPricel
       const prop = propByResId.get(`res.partner,${candidateId}`);
       const ref = prop?.value_reference; // e.g. "product.pricelist,3"
       if (typeof ref === 'string' && ref.startsWith('product.pricelist,')) {
-        const plId = parseInt(ref.split(',')[1], 10);
-        if (!isNaN(plId) && plId > 0) {
+        const rawPricelistId = parseInt(ref.split(',')[1], 10);
+        const plId = !isNaN(rawPricelistId) && rawPricelistId > 0
+          ? await pickCompatiblePricelistId(candidateId, rawPricelistId, effectiveCompanyId)
+          : null;
+        if (plId) {
           console.log(`[pricelist] Partner ${candidateId} pricelist from ir.property: ${plId}`);
-          return {
+          const resolution: PartnerPricelistResolution = {
             candidatePartnerIds,
             resolvedPartnerId: candidateId,
             pricelistId: plId,
             source: 'ir.property',
           };
+          cacheResolvedPartnerPricelistId(partnerId, plId, options);
+          partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
+          return resolution;
         }
       }
     }
@@ -178,26 +298,49 @@ async function resolvePartnerPricelist(partnerId: number): Promise<PartnerPricel
     console.log(`[pricelist] /get_records fallback for partner ${partnerId}:`, JSON.stringify(partners));
 
     if (partners && partners.length > 0) {
-      const plId = getPreferredPartnerPricelistId(partners[0]);
+      const rawPricelistId = getPreferredPartnerPricelistId(partners[0]);
+      const plId = await pickCompatiblePricelistId(partnerId, rawPricelistId, effectiveCompanyId);
       if (plId) {
-        return {
+        const resolution: PartnerPricelistResolution = {
           candidatePartnerIds,
           resolvedPartnerId: partnerId,
           pricelistId: plId,
           source: 'get_records',
         };
+        cacheResolvedPartnerPricelistId(partnerId, plId, options);
+        partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
+        return resolution;
       }
     }
   } catch (err) {
     console.warn('[pricelist] /get_records fallback failed:', err);
   }
 
-  return {
+  const fallbackPricelistId = resolveFallbackPricelistId(options);
+  if (fallbackPricelistId) {
+    const resolution: PartnerPricelistResolution = {
+      candidatePartnerIds,
+      resolvedPartnerId: null,
+      pricelistId: fallbackPricelistId,
+      source: 'company_fallback',
+    };
+    cacheResolvedPartnerPricelistId(partnerId, fallbackPricelistId, options);
+    console.log(
+      `[pricelist] Using company fallback pricelist ${fallbackPricelistId} for partner ${partnerId}`,
+    );
+    partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
+    return resolution;
+  }
+
+  const resolution: PartnerPricelistResolution = {
     candidatePartnerIds,
     resolvedPartnerId: null,
     pricelistId: null,
     source: 'none',
   };
+  cacheResolvedPartnerPricelistId(partnerId, null, options);
+  partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
+  return resolution;
 }
 
 /**
@@ -209,8 +352,8 @@ async function resolvePartnerPricelist(partnerId: number): Promise<PartnerPricel
  *
  * Returns null if no specific pricelist (= uses public).
  */
-export async function getPartnerPricelistId(partnerId: number): Promise<number | null> {
-  const resolution = await resolvePartnerPricelist(partnerId);
+export async function getPartnerPricelistId(partnerId: number, options?: PricingOptions): Promise<number | null> {
+  const resolution = await resolvePartnerPricelist(partnerId, options);
   if (!resolution.pricelistId) {
     console.log(`[pricelist] No pricelist found for partner ${partnerId}, using public prices`);
   }
@@ -222,6 +365,9 @@ export async function getPartnerPricelistId(partnerId: number): Promise<number |
  * Uses JSON-RPC search_read (primary) with /get_records fallback.
  */
 async function loadPricelistItems(pricelistId: number): Promise<PricelistItem[]> {
+  const cachedItems = pricelistItemsCache.get(pricelistId);
+  if (cachedItems) return cachedItems;
+
   // Try direct JSON-RPC first
   try {
     const items = await odooRpc<PricelistItem[]>('product.pricelist.item', 'search_read', [
@@ -233,6 +379,7 @@ async function loadPricelistItems(pricelistId: number): Promise<PricelistItem[]>
 
     if (items && items.length > 0) {
       console.log(`[pricelist] Loaded ${items.length} pricelist items via search_read for pricelist ${pricelistId}`);
+      pricelistItemsCache.set(pricelistId, items);
       return items;
     }
   } catch (err) {
@@ -245,6 +392,7 @@ async function loadPricelistItems(pricelistId: number): Promise<PricelistItem[]>
       ['pricelist_id', '=', pricelistId],
     ], PRICELIST_ITEM_FIELDS, 500);
     console.log(`[pricelist] Loaded ${items?.length ?? 0} pricelist items via /get_records for pricelist ${pricelistId}`);
+    pricelistItemsCache.set(pricelistId, items || []);
     return items || [];
   } catch (error) {
     console.warn('[pricelist] /get_records pricelist items failed:', error);
@@ -310,6 +458,10 @@ async function fetchServerSidePrices(
   partnerId: number,
   products: Array<{ id: number; list_price: number }>,
 ): Promise<Map<number, number> | null> {
+  if (!shouldTryServerPricingEndpoint()) {
+    return null;
+  }
+
   try {
     const result = await postRpc<any>('/api/get_all_products_with_customer_price', {
       customer_id: partnerId,
@@ -319,6 +471,10 @@ async function fetchServerSidePrices(
       console.warn('[pricelist] Server-side endpoint returned unexpected format:', result?.status);
       return null;
     }
+
+    // Endpoint is up. Reset any pending backoff so we fail fast if it
+    // disappears again.
+    markServerPricingEndpointAvailable();
 
     const priceMap = new Map<number, number>();
     const productIds = new Set(products.map((p) => p.id));
@@ -341,6 +497,10 @@ async function fetchServerSidePrices(
     console.log(`[pricelist] Server-side: ${priceMap.size} custom prices for partner ${partnerId}`);
     return priceMap;
   } catch (err) {
+    if (disableServerPricingEndpointIfMissing(err)) {
+      console.warn('[pricelist] Server-side pricing endpoint unavailable, backing off before retry.');
+      return null;
+    }
     console.warn('[pricelist] Server-side endpoint unavailable, falling back to client-side:', err);
     return null;
   }
@@ -359,23 +519,35 @@ async function fetchServerSidePrices(
 export async function computeCustomerPrices(
   partnerId: number,
   products: Array<{ id: number; list_price: number; product_tmpl_id?: any; categ_id?: any; standard_price?: number }>,
+  options?: PricingOptions,
 ): Promise<Map<number, number>> {
   console.log(`[pricelist] Computing prices for partner ${partnerId}, ${products.length} products`);
+  const cachedPrices = peekCachedCustomerPrices(partnerId, products, options);
+  if (cachedPrices) {
+    return cachedPrices;
+  }
 
   // ── Strategy 1: Server-side (preferred — Odoo native pricelist engine) ──
   const serverPrices = await fetchServerSidePrices(partnerId, products);
-  if (serverPrices !== null) return serverPrices;
+  if (serverPrices !== null) {
+    cacheCustomerPrices(partnerId, products, serverPrices, options);
+    return serverPrices;
+  }
 
   // ── Strategy 2: Client-side fallback ──
   const priceMap = new Map<number, number>();
 
-  const resolution = await resolvePartnerPricelist(partnerId);
+  const resolution = await resolvePartnerPricelist(partnerId, options);
   const pricelistId = resolution.pricelistId;
-  if (!pricelistId) return priceMap;
+  if (!pricelistId) {
+    cacheCustomerPrices(partnerId, products, priceMap, options);
+    return priceMap;
+  }
 
   const items = await loadPricelistItems(pricelistId);
   if (items.length === 0) {
     console.log(`[pricelist] Pricelist ${pricelistId} has no items`);
+    cacheCustomerPrices(partnerId, products, priceMap, options);
     return priceMap;
   }
 
@@ -421,5 +593,19 @@ export async function computeCustomerPrices(
   }
 
   console.log(`[pricelist] Client-side: ${priceMap.size} custom prices for partner ${partnerId} (pricelist ${pricelistId})`);
+  cacheCustomerPrices(partnerId, products, priceMap, options);
   return priceMap;
+}
+
+export async function preloadRouteCustomerPrices(
+  partnerIds: number[],
+  products: Array<{ id: number; list_price: number; product_tmpl_id?: any; categ_id?: any; standard_price?: number }>,
+  options?: PricingOptions,
+): Promise<void> {
+  const uniquePartnerIds = [...new Set(partnerIds.filter((id) => typeof id === 'number' && id > 0))];
+  if (uniquePartnerIds.length === 0 || products.length === 0) return;
+
+  await Promise.allSettled(
+    uniquePartnerIds.map((partnerId) => computeCustomerPrices(partnerId, products, options)),
+  );
 }

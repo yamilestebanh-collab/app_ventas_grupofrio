@@ -143,6 +143,98 @@ export async function uploadStopImage(
   return !!result;
 }
 
+// ═══ Sales & Payments (gf_logistics_ops) ═══
+//
+// Replaces the legacy `/api/create_update` path over `sale.order` /
+// `account.payment`, which required ACLs the driver user doesn't have
+// and had no server-side tolerance for obsolete stop_id.
+//
+// Backend contract (already deployed):
+//   POST /gf/logistics/api/employee/sales/create
+//     Body:  { operation_id|x_operation_id, partner_id, lines,
+//              stop_id?, warehouse_id?, pricelist_id?, note?, _client_meta? }
+//     Line:  { product_id, quantity, price_unit?, discount? }
+//
+//   POST /gf/logistics/api/employee/payments/create
+//     Body:  { operation_id|x_operation_id, amount,
+//              sale_order_id|partner_id, payment_method_line_id?,
+//              stop_id?, journal_id?, payment_date?, reference?, currency_id? }
+
+export async function createSale(
+  payload: Record<string, unknown>,
+  meta?: ClientEventMeta | null,
+): Promise<boolean> {
+  const body = attachClientMetaToRestPayload(payload, meta ?? null);
+  const result = await postRest<{ success?: boolean }>(
+    `${GF_BASE}/sales/create`,
+    body,
+  );
+  return !!result;
+}
+
+export async function createPayment(
+  payload: Record<string, unknown>,
+  meta?: ClientEventMeta | null,
+): Promise<boolean> {
+  const body = attachClientMetaToRestPayload(payload, meta ?? null);
+  const result = await postRest<{ success?: boolean }>(
+    `${GF_BASE}/payments/create`,
+    body,
+  );
+  return !!result;
+}
+
+export async function fetchAnalyticsOptions(
+  payload: { partner_id?: number | null; partner_ids?: number[] } = {},
+): Promise<Record<string, unknown> | null> {
+  try {
+    const body: Record<string, unknown> = {};
+    if (typeof payload.partner_id === 'number' && payload.partner_id > 0) {
+      body.partner_id = payload.partner_id;
+    }
+    if (Array.isArray(payload.partner_ids) && payload.partner_ids.length > 0) {
+      body.partner_ids = payload.partner_ids.filter((id) => typeof id === 'number' && id > 0);
+    }
+
+    const result = await postRest<Record<string, unknown>>(
+      `${GF_BASE}/analytics/options`,
+      body,
+    );
+    return result;
+  } catch (error) {
+    if (__DEV__) console.warn('[gfLogistics] analytics/options unavailable, falling back:', error);
+    return null;
+  }
+}
+
+export async function fetchLeadStages(
+  companyId?: number | null,
+): Promise<Array<{ id: number; name: string; sequence?: number }>> {
+  const body: Record<string, unknown> = {};
+  if (typeof companyId === 'number' && companyId > 0) {
+    body.company_id = companyId;
+  }
+
+  const result = await postRest<any>(`${GF_BASE}/lead/stages`, body);
+  if (!result || typeof result !== 'object') return [];
+  const data = result.data !== undefined ? result.data : result;
+  if (Array.isArray(data?.stages)) return data.stages;
+  if (Array.isArray(data)) return data;
+  return [];
+}
+
+export async function upsertLeadData(
+  payload: Record<string, unknown>,
+  meta?: ClientEventMeta | null,
+): Promise<Record<string, unknown> | null> {
+  const body = attachClientMetaToRestPayload(payload, meta ?? null);
+  const result = await postRest<any>(`${GF_BASE}/lead/upsert`, body);
+  if (!result || typeof result !== 'object') return null;
+  const data = result.data !== undefined ? result.data : result;
+  const lead = data?.lead ?? data;
+  return lead && typeof lead === 'object' ? lead : null;
+}
+
 // ═══ Session ═══
 
 export async function signOut(): Promise<void> {

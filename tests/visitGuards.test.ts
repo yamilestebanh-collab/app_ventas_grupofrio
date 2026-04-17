@@ -6,6 +6,7 @@ interface VisitGuardModule {
     stopId: number;
     currentStopId: number | null;
     phase: 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
+    currentStopExists?: boolean;
   }) => {
     canStartVisit: boolean;
     canResumeVisit: boolean;
@@ -71,6 +72,20 @@ function testAnotherActiveVisitBlocksStart(visitGuards: VisitGuardModule) {
   assert.equal(guard.primaryActionLabel, '🔒 Otra visita en curso');
 }
 
+function testStaleActiveVisitDoesNotBlockStart(visitGuards: VisitGuardModule) {
+  const guard = visitGuards.deriveVisitGuard({
+    stopState: 'pending',
+    stopId: 10,
+    currentStopId: 22,
+    phase: 'checked_in',
+    currentStopExists: false,
+  });
+
+  assert.equal(guard.hasAnotherActiveVisit, false);
+  assert.equal(guard.canStartVisit, true);
+  assert.equal(guard.primaryActionLabel, '📍 Check-in · Iniciar Visita');
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const visitGuards = await import(
@@ -82,6 +97,7 @@ async function main() {
   testInProgressCurrentStopCanResume(visitGuards);
   testCompletedStopBlocksRestart(visitGuards);
   testAnotherActiveVisitBlocksStart(visitGuards);
+  testStaleActiveVisitDoesNotBlockStart(visitGuards);
   console.log('visit guards tests: ok');
 }
 

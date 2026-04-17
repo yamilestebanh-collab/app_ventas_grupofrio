@@ -29,6 +29,9 @@ import { useAuthStore } from '../../src/stores/useAuthStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { getStopTypeLabel } from '../../src/services/routePresentation';
+import { logInfo } from '../../src/utils/logger';
+import { visitTelemetryCounters } from '../../src/utils/visitTelemetry';
+import { getLeadActionVisibility } from '../../src/services/leadVisit';
 
 export default function StopDetailScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -70,12 +73,32 @@ export default function StopDetailScreen() {
   const allowOffDistanceVisits = useAuthStore((s) => s.allowOffDistanceVisits);
   const phase = useVisitStore((s) => s.phase);
   const currentStopId = useVisitStore((s) => s.currentStopId);
+  const currentStopExists = currentStopId == null
+    ? true
+    : stops.some((candidate) => candidate.id === currentStopId);
+
+  // Telemetry: record when the guard is about to ignore an "another
+  // visit in progress" block because the active visit's stop no longer
+  // exists in the plan. This is the "ghost suppression" case; we want
+  // to see it fire on real refresh loops in piloto, not on steady-state.
+  React.useEffect(() => {
+    if (currentStopId != null && !currentStopExists) {
+      visitTelemetryCounters.guardGhostSuppressedTotal += 1;
+      logInfo('visit', 'guard_ghost_suppressed', {
+        currentStopId,
+        viewingStopId: stop.id,
+        totalTriggers: visitTelemetryCounters.guardGhostSuppressedTotal,
+      });
+    }
+  }, [currentStopId, currentStopExists, stop.id]);
+
   const canOperateOffDistance = allowOffDistanceVisits && !!(stop.customer_latitude && stop.customer_longitude);
   const visitGuard = deriveVisitGuard({
     stopState: stop.state,
     stopId: stop.id,
     currentStopId,
     phase,
+    currentStopExists,
   });
   const canStartVisit = isGeoOk || canOperateOffDistance;
   const canOpenVisit = visitGuard.canResumeVisit || (visitGuard.canStartVisit && canStartVisit);
@@ -83,6 +106,7 @@ export default function StopDetailScreen() {
     ? `🔴 Fuera de rango (${Math.round(distance)}m)`
     : visitGuard.primaryActionLabel;
   const stopTypeLabel = getStopTypeLabel(stop);
+  const actionVisibility = getLeadActionVisibility(stop);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -151,20 +175,33 @@ export default function StopDetailScreen() {
             </Text>
           )}
           <View style={styles.actionRow}>
-            <Button
-              label="🧾 Venta"
-              variant="secondary"
-              onPress={() => router.push(`/sale/${stop.id}` as never)}
-              style={{ flex: 1 }}
-              disabled={!visitGuard.canAccessVisitActions}
-            />
-            <Button
-              label="✕ No venta"
-              variant="danger"
-              onPress={() => router.push(`/nosale/${stop.id}` as never)}
-              style={{ flex: 1 }}
-              disabled={!visitGuard.canAccessVisitActions}
-            />
+            {actionVisibility.showData ? (
+              <Button
+                label="📋 Datos"
+                variant="secondary"
+                onPress={() => router.push(`/postvisit/${stop.id}` as never)}
+                style={{ flex: 1 }}
+                disabled={!visitGuard.canAccessVisitActions}
+              />
+            ) : null}
+            {actionVisibility.showSale ? (
+              <Button
+                label="🧾 Venta"
+                variant="secondary"
+                onPress={() => router.push(`/sale/${stop.id}` as never)}
+                style={{ flex: 1 }}
+                disabled={!visitGuard.canAccessVisitActions}
+              />
+            ) : null}
+            {actionVisibility.showNoSale ? (
+              <Button
+                label="✕ No venta"
+                variant="danger"
+                onPress={() => router.push(`/nosale/${stop.id}` as never)}
+                style={{ flex: 1 }}
+                disabled={!visitGuard.canAccessVisitActions}
+              />
+            ) : null}
           </View>
           <View style={styles.actionRow}>
             <Button

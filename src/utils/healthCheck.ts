@@ -165,6 +165,8 @@ export function getDiagnosticsExport(): Record<string, unknown> {
   const products = useProductStore.getState();
   const location = useLocationStore.getState();
   const health = getHealthStatus();
+  const logBuffer = getLogBuffer();
+  const apiLogs = logBuffer.filter((entry) => entry.category === 'api');
 
   return {
     exportedAt: new Date().toISOString(),
@@ -224,10 +226,11 @@ export function getDiagnosticsExport(): Record<string, unknown> {
       queueSize: sync.queue.filter((i) => i.type === 'gps' && i.status === 'pending').length,
     },
     logs: {
-      recentCount: getLogBuffer().length,
+      recentCount: logBuffer.length,
       errorCount: getErrorLog().length,
       persistedErrorCount: getPersistedErrorCount(),
-      last20: getLogBuffer().slice(-20),
+      last20: logBuffer.slice(-20),
+      apiLast50: apiLogs.slice(-50),
       errors: getErrorLog().slice(-50), // Full persisted set (up to 50)
     },
   };

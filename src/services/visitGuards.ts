@@ -16,6 +16,7 @@ interface DeriveVisitGuardInput {
   stopId: number;
   currentStopId: number | null;
   phase: VisitPhase;
+  currentStopExists?: boolean;
 }
 
 export function isCompletedStopState(stopState: StopState): boolean {
@@ -31,10 +32,12 @@ export function deriveVisitGuard({
   stopId,
   currentStopId,
   phase,
+  currentStopExists = true,
 }: DeriveVisitGuardInput) {
   const visitPhaseActive = isVisitPhaseActive(phase);
-  const isCurrentVisit = visitPhaseActive && currentStopId === stopId;
-  const hasAnotherActiveVisit = visitPhaseActive && currentStopId !== null && currentStopId !== stopId;
+  const hasValidActiveVisit = visitPhaseActive && currentStopExists && currentStopId !== null;
+  const isCurrentVisit = hasValidActiveVisit && currentStopId === stopId;
+  const hasAnotherActiveVisit = hasValidActiveVisit && currentStopId !== stopId;
   const isCompletedStop = isCompletedStopState(stopState);
   const canStartVisit = stopState === 'pending' && !hasAnotherActiveVisit;
   const canResumeVisit = stopState === 'in_progress' && isCurrentVisit;

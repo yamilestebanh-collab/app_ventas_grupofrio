@@ -24,8 +24,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useProductStore, TruckProduct } from '../../stores/useProductStore';
 import { useVisitStore, SaleLineItem } from '../../stores/useVisitStore';
 import { useKoldStore } from '../../stores/useKoldStore';
+import { useAuthStore } from '../../stores/useAuthStore';
 import { getBaseUrl } from '../../services/api';
-import { computeCustomerPrices } from '../../services/pricelist';
+import { computeCustomerPrices, peekCachedCustomerPrices } from '../../services/pricelist';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
 import { typography, fonts } from '../../theme/typography';
@@ -106,6 +107,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
   const inventorySource = useProductStore((s) => s.inventorySource);
   const addSaleLine = useVisitStore((s) => s.addSaleLine);
   const forecasts = useKoldStore((s) => s.forecasts);
+  const companyId = useAuthStore((s) => s.companyId);
   const isGlobalFallback = inventorySource === 'global_legacy';
 
   const [search, setSearch] = useState('');
@@ -133,11 +135,18 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
   useEffect(() => {
     if (!visible || !partnerId) {
       setPriceMap(new Map());
+      setPriceLoading(false);
+      return;
+    }
+    const cached = peekCachedCustomerPrices(partnerId, products, { companyId });
+    if (cached) {
+      setPriceMap(cached);
+      setPriceLoading(false);
       return;
     }
     let cancelled = false;
     setPriceLoading(true);
-    computeCustomerPrices(partnerId, products).then((map) => {
+    computeCustomerPrices(partnerId, products, { companyId }).then((map) => {
       if (!cancelled) {
         setPriceMap(map);
         setPriceLoading(false);
@@ -146,7 +155,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
       if (!cancelled) setPriceLoading(false);
     });
     return () => { cancelled = true; };
-  }, [visible, partnerId, products]);
+  }, [visible, partnerId, products, companyId]);
 
   const toggleView = useCallback(() => {
     const next: ViewMode = viewMode === 'list' ? 'grid' : 'list';

@@ -19,17 +19,24 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useKoldStore, KoldAlert } from '../../src/stores/useKoldStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
+import { useProductStore } from '../../src/stores/useProductStore';
+import { preloadRouteCustomerPrices } from '../../src/services/pricelist';
 
 export default function HomeScreen() {
   const router = useRouter();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const employeeId = useAuthStore((s) => s.employeeId);
   const employeeName = useAuthStore((s) => s.employeeName);
+  const companyId = useAuthStore((s) => s.companyId);
+  const warehouseId = useAuthStore((s) => s.warehouseId);
   const {
     plan, stops, stopsCompleted, stopsTotal, progressPct,
     isLoading, loadPlan,
   } = useRouteStore();
   const isOnline = useSyncStore((s) => s.isOnline);
+  const products = useProductStore((s) => s.products);
+  const isLoadingProducts = useProductStore((s) => s.isLoading);
+  const loadProducts = useProductStore((s) => s.loadProducts);
 
   // Reload on auth identity changes so a previous employee's in-memory state is not reused.
   useEffect(() => {
@@ -37,6 +44,21 @@ export default function HomeScreen() {
       void loadPlan();
     }
   }, [employeeId, isAuthenticated, isOnline, loadPlan]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !isOnline || !warehouseId || products.length > 0 || isLoadingProducts) {
+      return;
+    }
+    void loadProducts(warehouseId);
+  }, [isAuthenticated, isOnline, warehouseId, products.length, isLoadingProducts, loadProducts]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !isOnline || stops.length === 0 || products.length === 0) {
+      return;
+    }
+    const partnerIds = stops.map((stop) => stop.customer_id);
+    void preloadRouteCustomerPrices(partnerIds, products, { companyId });
+  }, [isAuthenticated, isOnline, stops, products, companyId]);
 
   // BLD-20260408: Use getAlerts() method (not s.alerts property which doesn't exist)
   const getAlerts = useKoldStore((s) => s.getAlerts);

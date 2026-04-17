@@ -10,6 +10,7 @@ import { create } from 'zustand';
 import { GFStop } from '../types/plan';
 import { storeRemove, storeSave, STORAGE_KEYS } from '../persistence/storage';
 import { PersistedVisitSnapshot, buildVisitSnapshot } from '../services/visitPersistence';
+import { buildStartedVisitState, createInitialVisitState } from '../services/visitState';
 
 export type VisitPhase = 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
 
@@ -37,6 +38,8 @@ interface VisitState {
   // Sale data
   saleLines: SaleLineItem[];
   salePaymentMethod: 'cash' | 'credit' | null;
+  analyticPlazaId: number | null;
+  analyticUnId: number | null;
   salePhotoTaken: boolean;
   salePhotoUri: string | null;
 
@@ -58,6 +61,8 @@ interface VisitState {
   updateSaleQty: (productId: number, qty: number) => void;
   removeSaleLine: (productId: number) => void;
   setSalePayment: (method: 'cash' | 'credit') => void;
+  setSaleAnalyticPlaza: (analyticPlazaId: number | null) => void;
+  setSaleAnalyticUn: (analyticUnId: number | null) => void;
   setSalePhoto: (uri: string) => void;
 
   // No-sale actions
@@ -92,28 +97,7 @@ interface VisitState {
   unlockSaleConfirm: () => void;
 }
 
-const initialState = {
-  phase: 'idle' as VisitPhase,
-  currentStopId: null as number | null,
-  currentStop: null as GFStop | null,
-  checkInTime: null as number | null,
-  checkInLat: null as number | null,
-  checkInLon: null as number | null,
-  elapsedSeconds: 0,
-  saleLines: [] as SaleLineItem[],
-  salePaymentMethod: null as 'cash' | 'credit' | null,
-  salePhotoTaken: false,
-  salePhotoUri: null as string | null,
-  noSaleReasonId: null as number | null,
-  noSaleReasonLabel: '',
-  noSaleCompetitor: null as string | null,
-  noSaleNotes: '',
-  noSalePhotoTaken: false,
-  noSalePhotoUri: null as string | null,
-  // V1.2
-  saleConfirmed: false,
-  saleOperationId: null as string | null,
-};
+const initialState = createInitialVisitState();
 
 function persistVisitState(state: {
   phase: VisitPhase;
@@ -136,15 +120,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   ...initialState,
 
   startVisit: (stop, lat, lon) => {
-    const nextState = {
-      phase: 'checked_in' as VisitPhase,
-      currentStopId: stop.id,
-      currentStop: stop,
-      checkInTime: Date.now(),
-      checkInLat: lat,
-      checkInLon: lon,
-      elapsedSeconds: 0,
-    };
+    const nextState = buildStartedVisitState(stop, lat, lon);
     set(nextState);
     persistVisitState(nextState);
   },
@@ -186,6 +162,8 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   }),
 
   setSalePayment: (method) => set({ salePaymentMethod: method }),
+  setSaleAnalyticPlaza: (analyticPlazaId) => set({ analyticPlazaId }),
+  setSaleAnalyticUn: (analyticUnId) => set({ analyticUnId }),
   setSalePhoto: (uri) => set({ salePhotoTaken: true, salePhotoUri: uri }),
 
   // No-sale

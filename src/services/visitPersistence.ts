@@ -54,3 +54,11 @@ export function shouldRehydrateVisit(
   const stop = stops.find((candidate) => candidate.id === snapshot.currentStopId);
   return stop?.state === 'in_progress';
 }
+
+export function shouldResetVisitAfterPlanRefresh(
+  currentStopId: number | null,
+  stops: Array<Pick<GFStop, 'id' | 'state'>>,
+): boolean {
+  if (currentStopId == null) return false;
+  return !stops.some((candidate) => candidate.id === currentStopId);
+}

@@ -3,8 +3,8 @@
  * Product lines with +/- qty, totals, payment method, mandatory photo.
  */
 
-import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
@@ -13,31 +13,55 @@ import { Card } from '../../src/components/ui/Card';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
-import { useVisitStore, SaleLineItem } from '../../src/stores/useVisitStore';
+import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useProductStore } from '../../src/stores/useProductStore';
+import { useAuthStore } from '../../src/stores/useAuthStore';
 import { SaveIndicator } from '../../src/components/ui/SaveIndicator';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatCurrency, formatPriceWithIVA } from '../../src/utils/time';
 import { takePhoto } from '../../src/services/camera';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
+import { shouldAutoLoadProducts } from '../../src/utils/productLoading';
+import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
+import {
+  getCompanyFallbackPricelistId,
+  getEffectiveSalesCompanyId,
+  peekResolvedPartnerPricelistId,
+} from '../../src/services/pricelist';
+import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
+import { logInfo } from '../../src/utils/logger';
+import { getLeadPartnerId } from '../../src/services/leadVisit';
 
 export default function SaleScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
+  const removeStop = useRouteStore((s) => s.removeStop);
   const stop = stops.find((s) => s.id === Number(stopId));
-  const updateStopState = useRouteStore((s) => s.updateStopState);
+  const companyId = useAuthStore((s) => s.companyId);
+  const warehouseId = useAuthStore((s) => s.warehouseId);
+  const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
+  const employeeAnalyticPlazaName = useAuthStore((s) => s.employeeAnalyticPlazaName);
+  const products = useProductStore((s) => s.products);
+  const isLoadingProducts = useProductStore((s) => s.isLoading);
+  const productError = useProductStore((s) => s.error);
+  const loadProducts = useProductStore((s) => s.loadProducts);
 
   const {
     saleLines, salePaymentMethod, salePhotoTaken,
-    updateSaleQty, setSalePayment, setPhase,
-    saleSubtotal, saleTax, saleTotal, saleTotalKg,
+    updateSaleQty, setSalePayment,
+    saleSubtotal, saleTax, saleTotal, saleTotalKg, resetVisit,
   } = useVisitStore();
 
   const enqueue = useSyncStore((s) => s.enqueue);
-  const isOnline = useSyncStore((s) => s.isOnline);
 
   const [pickerVisible, setPickerVisible] = React.useState(false);
+
+  useEffect(() => {
+    if (shouldAutoLoadProducts(warehouseId, products.length, isLoadingProducts)) {
+      loadProducts(warehouseId!);
+    }
+  }, [warehouseId, products.length, isLoadingProducts, loadProducts]);
 
   if (!stop) {
     return (
@@ -60,8 +84,13 @@ export default function SaleScreen() {
   const { saleConfirmed, hasStockIssues, getStockIssues, lockSaleConfirm } = useVisitStore();
   const stockIssues = getStockIssues();
   const hasStock = !hasStockIssues();
+  const implicitAnalytics = resolveImplicitSaleAnalytics({
+    employeeAnalyticPlazaId,
+  });
+  const hasAnalyticSelection = !!implicitAnalytics.analytic_plaza_id && !!implicitAnalytics.analytic_un_id;
   const canConfirm = saleLines.length > 0 && salePhotoTaken && salePaymentMethod
-                     && hasStock && !saleConfirmed;
+                     && hasAnalyticSelection && hasStock && !saleConfirmed;
+  const salePartnerId = getLeadPartnerId(stop) ?? stop.customer_id;
 
   async function handleConfirm() {
     if (saleConfirmed) return; // V1.2: Anti double-tap
@@ -81,47 +110,75 @@ export default function SaleScreen() {
       if (saleLines.length === 0) missing.push('productos');
       if (!salePhotoTaken) missing.push('foto de entrega');
       if (!salePaymentMethod) missing.push('metodo de pago');
+      if (!implicitAnalytics.analytic_plaza_id) missing.push('plaza del empleado');
       Alert.alert('Faltan datos', `Completa: ${missing.join(', ')}`);
       return;
     }
 
     if (!stop) return;
+    if (stop._entityType === 'lead' && !getLeadPartnerId(stop)) {
+      Alert.alert('Lead no vendible', 'Primero completa Datos para crear o enlazar el contacto del lead.');
+      return;
+    }
 
     // V1.2: Lock to prevent duplicate
-    const operationId = lockSaleConfirm();
+    lockSaleConfirm();
 
     // BLD-20260408-P0: Detect off-route sales (virtual stops have negative IDs)
     const isOffRoute = stop.id < 0;
+    const effectiveCompanyId = getEffectiveSalesCompanyId(companyId);
+    const pricelistId =
+      peekResolvedPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId }) ??
+      getCompanyFallbackPricelistId(effectiveCompanyId);
 
     // Create sale order payload with idempotency key
     const payload = {
-      _operationId: operationId,
-      partner_id: stop.customer_id,
+      partner_id: salePartnerId,
       stop_id: isOffRoute ? null : stop.id, // Don't send negative virtual IDs to backend
-      is_offroute: isOffRoute,
-      payment_method: salePaymentMethod,
+      warehouse_id: warehouseId ?? null,
+      pricelist_id: pricelistId ?? null,
+      analytic_plaza_id: implicitAnalytics.analytic_plaza_id,
+      analytic_un_id: implicitAnalytics.analytic_un_id,
+      analytic_distribution: implicitAnalytics.analytic_distribution,
       lines: saleLines.map((l) => ({
         product_id: l.productId,
-        qty: l.qty,
+        quantity: l.qty,
         price_unit: l.price,
+        discount: 0,
       })),
-      total,
-      total_kg: totalKg,
-      timestamp: Date.now(),
     };
 
-    // Enqueue (idempotent — operationId prevents duplicates)
-    enqueue('sale_order', payload);
+    logInfo('general', 'sale_enqueue_payload', {
+      partner_id: salePartnerId,
+      stop_id: payload.stop_id,
+      warehouse_id: payload.warehouse_id,
+      pricelist_id: payload.pricelist_id,
+      analytic_plaza_id: payload.analytic_plaza_id,
+      analytic_un_id: payload.analytic_un_id,
+      employee_analytic_plaza_id: employeeAnalyticPlazaId,
+      employee_analytic_plaza_name: employeeAnalyticPlazaName,
+      line_count: payload.lines.length,
+      company_id: companyId,
+      effective_company_id: effectiveCompanyId,
+    });
+
+    // Enqueue and remember the real queue item id. That same id becomes the
+    // operation_id sent to backend, and checkout can use it to avoid closing
+    // the stop before the sale exists server-side.
+    const saleSyncId = enqueue('sale_order', payload);
+    useVisitStore.setState({ saleOperationId: saleSyncId });
 
     // V1.2: Deduct local inventory immediately
     const updateLocalStock = useProductStore.getState().updateLocalStock;
     saleLines.forEach((l) => updateLocalStock(l.productId, -l.qty));
 
-    // Update stop state
-    updateStopState(stop.id, 'done');
-    setPhase('checked_out');
+    if (shouldSkipStopCheckout(stop.id)) {
+      removeStop(stop.id);
+      resetVisit();
+      router.replace('/(tabs)' as never);
+      return;
+    }
 
-    // Navigate to checkout
     router.push(`/checkout/${stop.id}` as never);
   }
 
@@ -175,12 +232,24 @@ export default function SaleScreen() {
         )}
 
         {/* Product picker */}
+        {isLoadingProducts && saleLines.length === 0 && (
+          <View style={styles.emptyProducts}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={[typography.dim, { marginTop: 8 }]}>Cargando productos...</Text>
+          </View>
+        )}
+        {!isLoadingProducts && productError && products.length === 0 && (
+          <View style={styles.emptyProducts}>
+            <Text style={typography.dim}>{productError}</Text>
+          </View>
+        )}
         <Button
           label="+ Agregar producto"
           variant="secondary"
           small
           fullWidth
           onPress={() => setPickerVisible(true)}
+          disabled={isLoadingProducts || (!!productError && products.length === 0)}
           style={{ marginVertical: 10 }}
         />
         <ProductPicker
@@ -227,6 +296,16 @@ export default function SaleScreen() {
             onPress={() => setSalePayment('credit')}
             style={{ flex: 1 }}
           />
+        </View>
+
+        <View style={styles.analyticsInfo}>
+          <Text style={styles.sectionTitle}>Analiticas</Text>
+          <Text style={styles.analyticsInfoText}>
+            Plaza: {employeeAnalyticPlazaName || 'Sin configurar en empleado'}
+          </Text>
+          <Text style={styles.analyticsInfoText}>
+            Unidad de negocio: CEDIS
+          </Text>
         </View>
 
         {/* Mandatory photo */}
@@ -293,6 +372,7 @@ export default function SaleScreen() {
             {!hasStock ? '⚠️ Ajusta cantidades al stock' : ''}
             {hasStock && !salePhotoTaken ? '📸 Toma la foto' : ''}
             {hasStock && salePhotoTaken && !salePaymentMethod ? '💰 Selecciona pago' : ''}
+            {hasStock && salePhotoTaken && salePaymentMethod && !implicitAnalytics.analytic_plaza_id ? '📍 Configura la plaza del empleado' : ''}
           </Text>
         )}
       </ScrollView>
@@ -361,6 +441,17 @@ const styles = StyleSheet.create({
   },
   // Payment
   paymentRow: { flexDirection: 'row', gap: 6, marginVertical: 10 },
+  analyticsInfo: {
+    backgroundColor: colors.cardLighter,
+    borderRadius: radii.card,
+    padding: 12,
+    marginBottom: 10,
+  },
+  analyticsInfoText: {
+    fontSize: 12,
+    color: colors.text,
+    marginTop: 4,
+  },
   // Photo
   sectionTitle: {
     fontSize: 12, fontWeight: '700', textTransform: 'uppercase',

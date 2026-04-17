@@ -13,6 +13,7 @@ import { Card } from '../../src/components/ui/Card';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatCurrency } from '../../src/utils/time';
 import { Invoice } from '../../src/types/product';
 
@@ -26,6 +27,7 @@ export default function CollectScreen() {
   const { partnerId } = useLocalSearchParams<{ partnerId: string }>();
   const router = useRouter();
   const enqueue = useSyncStore((s) => s.enqueue);
+  const defaultPaymentJournalId = useAuthStore((s) => s.defaultPaymentJournalId);
 
   // In V1, invoices are loaded from Odoo. F6 will cache them.
   // For now, show empty state with clear explanation.
@@ -45,9 +47,8 @@ export default function CollectScreen() {
     enqueue('payment', {
       partner_id: Number(partnerId),
       amount: numAmount,
-      payment_method: paymentMethod,
-      invoice_ids: invoices.map((i) => i.id),
-      timestamp: Date.now(),
+      journal_id: defaultPaymentJournalId,
+      reference: 'Cobro visita',
     });
 
     Alert.alert(

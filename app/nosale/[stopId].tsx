@@ -16,8 +16,11 @@ import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { takePhoto } from '../../src/services/camera';
 import { useLocationStore } from '../../src/stores/useLocationStore';
-import { checkOut } from '../../src/services/gfLogistics';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
+import { checkOut, reportIncident } from '../../src/services/gfLogistics';
+import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+import { getLeadPartnerId } from '../../src/services/leadVisit';
 
 const NO_SALE_REASONS = [
   { id: 1, label: '🚪 Cerrado', code: 'closed' },
@@ -52,6 +55,7 @@ export default function NoSaleScreen() {
   const [selectedReasonId, setSelectedReasonId] = useState<number | null>(noSaleReasonId);
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(noSaleCompetitor);
   const [notes, setNotes] = useState(noSaleNotes);
+  const partnerId = getLeadPartnerId(stop) ?? stop.customer_id;
 
   if (!stop) {
     return (
@@ -66,6 +70,15 @@ export default function NoSaleScreen() {
 
   const showCompetitor = selectedReasonId === 5; // competitor reason
   const canSave = selectedReasonId != null && noSalePhotoTaken;
+
+  function finalizeNoSaleLocally() {
+    captureAndEnqueueGpsPoint('checkout').catch(() => {});
+    setGpsMode('in_transit');
+    updateStopState(stop!.id, 'done');
+    setPhase('checked_out');
+    resetVisit();
+    router.replace('/(tabs)' as never);
+  }
 
   async function handleSave() {
     if (!canSave) {
@@ -83,7 +96,7 @@ export default function NoSaleScreen() {
 
     const noSaleId = enqueue('no_sale', {
       stop_id: stop.id,
-      partner_id: stop.customer_id,
+      partner_id: partnerId,
       reason_id: selectedReasonId,
       reason_code: reason?.code,
       competitor: selectedCompetitor,
@@ -99,25 +112,17 @@ export default function NoSaleScreen() {
       noSaleReasonId: selectedReasonId,
     });
 
-    try {
-      if (isOnline) {
-        await checkOut(
-          checkoutPayload.stop_id,
-          checkoutPayload.latitude,
-          checkoutPayload.longitude,
-          checkoutPayload.result_status,
-        );
-      } else {
-        enqueue(
-          'checkout',
-          {
-            ...checkoutPayload,
-            timestamp: Date.now(),
-          },
-          { dependsOn: [noSaleId] },
-        );
-      }
-    } catch {
+    const enqueueNoSaleAndCheckout = () => {
+      const noSaleId = enqueue('no_sale', {
+        stop_id: stop.id,
+        partner_id: partnerId,
+        reason_id: selectedReasonId,
+        reason_code: reason?.code,
+        competitor: selectedCompetitor,
+        notes,
+        timestamp: Date.now(),
+      });
+
       enqueue(
         'checkout',
         {
@@ -126,13 +131,64 @@ export default function NoSaleScreen() {
         },
         { dependsOn: [noSaleId] },
       );
+    };
+
+    if (!isOnline) {
+      enqueueNoSaleAndCheckout();
+      finalizeNoSaleLocally();
+      return;
     }
 
-    // Update state and reset visit cleanly
-    updateStopState(stop.id, 'not_visited');
-    setPhase('checked_out');
-    resetVisit();
-    router.replace('/(tabs)' as never);
+    try {
+      await reportIncident(
+        stop.id,
+        (selectedReasonId as number) || 1,
+        `No-venta: ${reason?.code || ''} ${notes || ''}`.trim(),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo registrar la no-venta.';
+      if (isRetryableSyncErrorMessage(message)) {
+        enqueueNoSaleAndCheckout();
+        Alert.alert(
+          'Sincronizacion pendiente',
+          'No se pudo confirmar la no-venta con el servidor. La visita quedo pendiente de sincronizacion.',
+        );
+        finalizeNoSaleLocally();
+        return;
+      }
+
+      Alert.alert('No-venta rechazada', message);
+      return;
+    }
+
+    try {
+      await checkOut(
+        checkoutPayload.stop_id,
+        checkoutPayload.latitude,
+        checkoutPayload.longitude,
+        checkoutPayload.result_status,
+      );
+      finalizeNoSaleLocally();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo completar el check-out.';
+      if (isRetryableSyncErrorMessage(message)) {
+        enqueue(
+          'checkout',
+          {
+            ...checkoutPayload,
+            timestamp: Date.now(),
+          },
+        );
+        Alert.alert(
+          'Check-out pendiente',
+          'La no-venta ya quedo registrada, pero el cierre de visita quedo pendiente de sincronizacion.',
+        );
+        finalizeNoSaleLocally();
+        return;
+      }
+
+      Alert.alert('Check-out rechazado', message);
+    }
   }
 
   return (

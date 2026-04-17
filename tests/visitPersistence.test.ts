@@ -28,6 +28,10 @@ interface VisitPersistenceModule {
     snapshot: { currentStopId: number } | null,
     stops: Array<{ id: number; state: string }>,
   ) => boolean;
+  shouldResetVisitAfterPlanRefresh: (
+    currentStopId: number | null,
+    stops: Array<{ id: number; state: string }>,
+  ) => boolean;
 }
 
 function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
@@ -101,6 +105,37 @@ function testRehydrateRequiresInProgressStop(module: VisitPersistenceModule) {
   );
 }
 
+function testResetVisitWhenCurrentStopDisappearsFromFreshPlan(module: VisitPersistenceModule) {
+  assert.equal(
+    module.shouldResetVisitAfterPlanRefresh(
+      15,
+      [
+        { id: 16, state: 'pending' },
+        { id: 17, state: 'done' },
+      ],
+    ),
+    true,
+  );
+
+  assert.equal(
+    module.shouldResetVisitAfterPlanRefresh(
+      15,
+      [
+        { id: 15, state: 'pending' },
+        { id: 17, state: 'done' },
+      ],
+    ),
+    false,
+  );
+
+  assert.equal(
+    module.shouldResetVisitAfterPlanRefresh(null, [
+      { id: 15, state: 'pending' },
+    ]),
+    false,
+  );
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const module = await import(
@@ -111,6 +146,7 @@ async function main() {
   testBuildActiveVisitSnapshot(module);
   testIdleVisitDoesNotPersist(module);
   testRehydrateRequiresInProgressStop(module);
+  testResetVisitWhenCurrentStopDisappearsFromFreshPlan(module);
   console.log('visit persistence tests: ok');
 }
 

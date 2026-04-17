@@ -20,6 +20,7 @@ import { useVisitStore } from '../stores/useVisitStore';
 import { GFPlan, GFStop } from '../types/plan';
 import { TruckProduct } from '../stores/useProductStore';
 import { PersistedVisitSnapshot, shouldRehydrateVisit } from './visitPersistence';
+import { stampMissingCreatedAt, pruneStaleVirtualDrafts, extractVirtualDrafts } from './offrouteDrafts';
 // V2: Error persistence & periodic flush
 import { loadPersistedErrors, startErrorPersistence } from '../utils/logger';
 
@@ -43,7 +44,21 @@ export async function rehydrateAppState(): Promise<{
 
     // 2. Route plan
     const plan = await storeLoad<GFPlan>(STORAGE_KEYS.PLAN);
-    const stops = await storeLoad<GFStop[]>(STORAGE_KEYS.STOPS);
+    let stops = await storeLoad<GFStop[]>(STORAGE_KEYS.STOPS);
+
+    // Garbage-collect stale offroute drafts on boot (see offrouteDrafts.ts
+    // for the TTL) and stamp legacy drafts so the TTL can apply next time.
+    if (stops && stops.length > 0) {
+      const stamped = stampMissingCreatedAt(stops);
+      const staleDraftIds = new Set(
+        extractVirtualDrafts(stamped)
+          .filter((d) => !pruneStaleVirtualDrafts([d]).length)
+          .map((d) => d.id),
+      );
+      stops = staleDraftIds.size > 0
+        ? stamped.filter((s) => !staleDraftIds.has(s.id))
+        : stamped;
+    }
 
     if (plan && stops) {
       const today = new Date().toISOString().split('T')[0];

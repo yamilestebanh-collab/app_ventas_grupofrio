@@ -11,6 +11,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { setAuthTokens, clearAuthTokens, setBaseUrl } from '../services/api';
 import { signOut } from '../services/gfLogistics';
 import { clearOdooSession } from '../services/odooSession';
+import { extractEmployeeAnalyticPlaza, fetchEmployeeAnalyticPlaza } from '../services/employeeAnalytics';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { useRouteStore } from './useRouteStore';
 
@@ -27,6 +28,8 @@ interface AuthState {
   companyName: string;
   warehouseId: number | null;
   warehouseName: string;
+  employeeAnalyticPlazaId: number | null;
+  employeeAnalyticPlazaName: string;
   parentId: number | null; // supervisor
   isSupervisor: boolean;
 
@@ -51,6 +54,7 @@ interface AuthState {
   logout: () => Promise<void>;
   setLoading: (loading: boolean) => void;
   rehydrateAuth: () => Promise<boolean>;
+  ensureEmployeeAnalytics: () => Promise<void>;
 }
 
 // ============================================================
@@ -111,6 +115,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   companyName: '',
   warehouseId: null,
   warehouseName: '',
+  employeeAnalyticPlazaId: null,
+  employeeAnalyticPlazaName: '',
   parentId: null,
   isSupervisor: false,
   allowCreateCustomer: false,
@@ -129,6 +135,51 @@ export const useAuthStore = create<AuthState>((set) => ({
   customerIds: [],
 
   setLoading: (loading) => set({ isLoading: loading }),
+
+  ensureEmployeeAnalytics: async () => {
+    const state = useAuthStore.getState();
+    if (!state.isAuthenticated || !state.employeeId || state.employeeAnalyticPlazaId) {
+      return;
+    }
+
+    try {
+      const plaza = await fetchEmployeeAnalyticPlaza(state.employeeId);
+      if (!plaza.id) return;
+
+      set({
+        employeeAnalyticPlazaId: plaza.id,
+        employeeAnalyticPlazaName: plaza.name,
+      });
+
+      const nextState = useAuthStore.getState();
+      await storeSave(STORAGE_KEYS.AUTH_STATE, {
+        employeeId: nextState.employeeId,
+        employeeName: nextState.employeeName,
+        companyId: nextState.companyId,
+        companyName: nextState.companyName,
+        warehouseId: nextState.warehouseId,
+        warehouseName: nextState.warehouseName,
+        employeeAnalyticPlazaId: nextState.employeeAnalyticPlazaId,
+        employeeAnalyticPlazaName: nextState.employeeAnalyticPlazaName,
+        parentId: nextState.parentId,
+        isSupervisor: nextState.isSupervisor,
+        allowCreateCustomer: nextState.allowCreateCustomer,
+        allowFreeVisitsMode: nextState.allowFreeVisitsMode,
+        allowConfirmPayment: nextState.allowConfirmPayment,
+        allowDeliveryScreen: nextState.allowDeliveryScreen,
+        allowSalesDirectInvoice: nextState.allowSalesDirectInvoice,
+        allowOffDateVisits: nextState.allowOffDateVisits,
+        allowOffDistanceVisits: nextState.allowOffDistanceVisits,
+        maxCashLimit: nextState.maxCashLimit,
+        stockValueLimit: nextState.stockValueLimit,
+        defaultPaymentJournalId: nextState.defaultPaymentJournalId,
+        defaultCashAccountId: nextState.defaultCashAccountId,
+        customerIds: nextState.customerIds,
+      });
+    } catch (error) {
+      console.warn('[auth] Could not hydrate employee analytic plaza:', error);
+    }
+  },
 
   /**
    * BLD-20260408-P0: Restore employee data from AsyncStorage.
@@ -159,6 +210,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: typeof saved.companyName === 'string' ? saved.companyName : '',
         warehouseId,
         warehouseName: typeof saved.warehouseName === 'string' ? saved.warehouseName : '',
+        employeeAnalyticPlazaId: typeof saved.employeeAnalyticPlazaId === 'number' ? saved.employeeAnalyticPlazaId : null,
+        employeeAnalyticPlazaName: typeof saved.employeeAnalyticPlazaName === 'string' ? saved.employeeAnalyticPlazaName : '',
         parentId: typeof saved.parentId === 'number' ? saved.parentId : null,
         isSupervisor: !!saved.isSupervisor,
         allowCreateCustomer: !!saved.allowCreateCustomer,
@@ -274,6 +327,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       const parentRaw = pick(emp, 'parentId', 'parent_id');
       const paymentJournalRaw = pick(emp, 'defaultPaymentJournalId', 'default_payment_journal_id');
       const cashAccountRaw = pick(emp, 'defaultCashAccountId', 'default_cash_account_id');
+      const analyticPlaza = extractEmployeeAnalyticPlaza(emp);
 
       set({
         isAuthenticated: true,
@@ -285,6 +339,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: (pick<string>(emp, 'companyName') as string) ?? extractName(companyRaw),
         warehouseId: extractId(warehouseRaw),
         warehouseName: (pick<string>(emp, 'warehouseName') as string) ?? extractName(warehouseRaw),
+        employeeAnalyticPlazaId: analyticPlaza.id,
+        employeeAnalyticPlazaName: analyticPlaza.name,
         parentId: extractId(parentRaw),
         isSupervisor: !!pick(emp, 'isSupervisor', 'is_supervisor'),
         allowCreateCustomer: !!pick(emp, 'allowCreateCustomer', 'allow_create_customer'),
@@ -312,6 +368,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: state.companyName,
         warehouseId: state.warehouseId,
         warehouseName: state.warehouseName,
+        employeeAnalyticPlazaId: state.employeeAnalyticPlazaId,
+        employeeAnalyticPlazaName: state.employeeAnalyticPlazaName,
         parentId: state.parentId,
         isSupervisor: state.isSupervisor,
         allowCreateCustomer: state.allowCreateCustomer,
@@ -352,6 +410,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: '',
         warehouseId: null,
         warehouseName: '',
+        employeeAnalyticPlazaId: null,
+        employeeAnalyticPlazaName: '',
         customerIds: [],
       });
     }

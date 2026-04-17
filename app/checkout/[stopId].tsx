@@ -17,10 +17,13 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { formatElapsed, formatCurrency } from '../../src/utils/time';
-import { checkOut } from '../../src/services/gfLogistics';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
+import { checkOut } from '../../src/services/gfLogistics';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
+import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
+import { getSaleSyncState } from '../../src/services/saleSyncState';
 
 export default function CheckoutScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -28,16 +31,19 @@ export default function CheckoutScreen() {
   const stops = useRouteStore((s) => s.stops);
   const stop = stops.find((s) => s.id === Number(stopId));
   const updateStopState = useRouteStore((s) => s.updateStopState);
+  const removeStop = useRouteStore((s) => s.removeStop);
 
   const {
     elapsedSeconds, saleTotal, saleTotalKg, salePhotoTaken,
-    checkInLat, checkInLon, noSaleReasonId, resetVisit,
+    noSaleReasonId, saleOperationId, resetVisit,
   } = useVisitStore();
 
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
+  const queue = useSyncStore((s) => s.queue);
+  const processQueue = useSyncStore((s) => s.processQueue);
 
   const [sendEnCamino, setSendEnCamino] = React.useState(true);
   const [checkingOut, setCheckingOut] = React.useState(false); // Prevent double-tap
@@ -60,10 +66,47 @@ export default function CheckoutScreen() {
   const total = saleTotal();
   const totalKg = saleTotalKg();
 
-  async function handleCheckout() {
+  function finalizeCheckout(shouldNavigateToNextStop: boolean) {
+    captureAndEnqueueGpsPoint('checkout').catch(() => {});
+    setGpsMode('in_transit');
+    updateStopState(stop!.id, 'done');
+    resetVisit();
+
+    if (nextStop && shouldNavigateToNextStop) {
+      router.replace(`/stop/${nextStop.id}` as never);
+      return;
+    }
+    router.replace('/(tabs)' as never);
+  }
+
+  async function handleCheckout(shouldNavigateToNextStop: boolean) {
     if (!stop) return;
     if (checkingOut) return; // Guard: prevent double-tap
     setCheckingOut(true);
+
+    let saleSyncState = getSaleSyncState(saleOperationId, queue);
+    if (saleSyncState.status === 'pending' && isOnline) {
+      await processQueue();
+      saleSyncState = getSaleSyncState(saleOperationId, useSyncStore.getState().queue);
+    }
+
+    if (saleSyncState.status === 'pending') {
+      Alert.alert(
+        'Venta pendiente',
+        'Espera a que la venta termine de sincronizar antes de cerrar la visita.',
+      );
+      setCheckingOut(false);
+      return;
+    }
+
+    if (saleSyncState.status === 'failed') {
+      Alert.alert(
+        'Venta no sincronizada',
+        saleSyncState.message || 'La venta fallo y no se puede cerrar la visita todavia.',
+      );
+      setCheckingOut(false);
+      return;
+    }
 
     const lat = latitude || 0;
     const lon = longitude || 0;
@@ -75,42 +118,47 @@ export default function CheckoutScreen() {
       noSaleReasonId,
     });
 
-    try {
-      if (isOnline) {
-        await checkOut(
-          checkoutPayload.stop_id,
-          checkoutPayload.latitude,
-          checkoutPayload.longitude,
-          checkoutPayload.result_status,
-        );
-      } else {
-        enqueue('checkout', {
-          ...checkoutPayload,
-          timestamp: Date.now(),
-        });
-      }
-    } catch {
+    if (shouldSkipStopCheckout(checkoutPayload.stop_id)) {
+      removeStop(stop.id);
+      finalizeCheckout(shouldNavigateToNextStop);
+      return;
+    }
+
+    const enqueueCheckout = () => {
       enqueue('checkout', {
         ...checkoutPayload,
         timestamp: Date.now(),
       });
+    };
+
+    if (!isOnline) {
+      enqueueCheckout();
+      finalizeCheckout(shouldNavigateToNextStop);
+      return;
     }
 
-    // V2: Capture checkout GPS point and resume transit tracking
-    captureAndEnqueueGpsPoint('checkout').catch(() => {});
-    setGpsMode('in_transit');
+    try {
+      await checkOut(
+        checkoutPayload.stop_id,
+        checkoutPayload.latitude,
+        checkoutPayload.longitude,
+        checkoutPayload.result_status,
+      );
+      finalizeCheckout(shouldNavigateToNextStop);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo completar el check-out.';
+      if (isRetryableSyncErrorMessage(message)) {
+        enqueueCheckout();
+        Alert.alert(
+          'Check-out pendiente',
+          'No se pudo confirmar con el servidor. El cierre de visita quedo pendiente de sincronizacion.',
+        );
+        finalizeCheckout(shouldNavigateToNextStop);
+        return;
+      }
 
-    // Update stop state
-    updateStopState(stop!.id, 'done');
-
-    // Reset visit store
-    resetVisit();
-
-    // Navigate to next stop or home
-    if (nextStop && sendEnCamino) {
-      router.replace(`/stop/${nextStop.id}` as never);
-    } else {
-      router.replace('/(tabs)' as never);
+      Alert.alert('Check-out rechazado', message);
+      setCheckingOut(false);
     }
   }
 
@@ -198,7 +246,7 @@ export default function CheckoutScreen() {
               ? '✓ Confirmar Check-out y Navegar al Siguiente'
               : '✓ Confirmar Check-out'}
             variant="success"
-            onPress={handleCheckout}
+            onPress={() => handleCheckout(sendEnCamino)}
             fullWidth
             disabled={checkingOut}
             loading={checkingOut}
@@ -207,11 +255,7 @@ export default function CheckoutScreen() {
             <Button
               label="Ir al inicio sin navegar"
               variant="secondary"
-              onPress={() => {
-                updateStopState(stop.id, 'done');
-                resetVisit();
-                router.replace('/(tabs)' as never);
-              }}
+              onPress={() => handleCheckout(false)}
               fullWidth
               style={{ marginTop: 6 }}
             />

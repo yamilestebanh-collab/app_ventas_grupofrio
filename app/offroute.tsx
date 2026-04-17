@@ -65,7 +65,11 @@ export default function OffRouteScreen() {
     const virtualStopId = addVirtualStop(
       result.partnerId ?? result.id,
       result.name,
-      { entityType: result.entityType, leadId: result.entityType === 'lead' ? result.id : null },
+      {
+        entityType: result.entityType,
+        leadId: result.entityType === 'lead' ? result.id : null,
+        partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
+      },
     );
     updateStopState(virtualStopId, 'in_progress');
 
@@ -82,11 +86,16 @@ export default function OffRouteScreen() {
         _entityType: result.entityType,
         _isOffroute: true,
         _leadId: result.entityType === 'lead' ? result.id : null,
+        _partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
       },
       0, 0, // lat/lon — GPS will provide real values if available
     );
 
     if (result.entityType === 'lead') {
+      if (result.partnerId) {
+        router.push(`/checkin/${virtualStopId}` as never);
+        return;
+      }
       router.push(`/postvisit/${virtualStopId}` as never);
       return;
     }
