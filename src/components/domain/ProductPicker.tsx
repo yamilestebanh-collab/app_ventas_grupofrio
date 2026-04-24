@@ -186,12 +186,27 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     });
   }, [products, recommendations, existingProductIds, priceMap]);
 
+  // BLD-20260424-BUGA: si TODO el catálogo viene en 0 stock, mostramos
+  // los productos igual (marcados como "Agotado") para que el vendedor
+  // al menos pueda ver qué existe y reportar el problema al supervisor.
+  // Antes, la lista quedaba completamente vacía cuando el backend
+  // respondía con el catálogo pero sin stock sincronizado en el almacén.
+  const allOutOfStock = useMemo(
+    () =>
+      enrichedProducts.length > 0 &&
+      enrichedProducts.every((p) => (p.qty_display ?? 0) <= 0),
+    [enrichedProducts],
+  );
+
   // Filter + sort
   const filtered = useMemo(() => {
     return enrichedProducts.filter((p) => {
       if (activeCategory !== 'all' && p.category !== activeCategory) return false;
       if (!fuzzyMatch(p.name + ' ' + (p.default_code || ''), search)) return false;
-      if (!isGlobalFallback && p.qty_display <= 0) return false;
+      // Ocultar agotados SOLO si hay catálogo normal con stock. Si todo
+      // está en 0 o ya es fallback global, dejamos pasar para no dejar
+      // al vendedor con pantalla en blanco.
+      if (!isGlobalFallback && !allOutOfStock && p.qty_display <= 0) return false;
       return true;
     }).sort((a, b) => {
       if (a.isRecommended && !b.isRecommended) return -1;
@@ -200,7 +215,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
       if (a.qty_display <= 0 && b.qty_display > 0) return 1;
       return a.name.localeCompare(b.name);
     });
-  }, [enrichedProducts, activeCategory, search, isGlobalFallback]);
+  }, [enrichedProducts, activeCategory, search, isGlobalFallback, allOutOfStock]);
 
   // Category counts
   const categoryCounts = useMemo(() => {
