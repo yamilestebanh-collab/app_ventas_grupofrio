@@ -46,59 +46,6 @@ export async function getMyPlan(): Promise<GFPlan | null> {
   }
 }
 
-/**
- * BLD-20260424-BUGB: Inferir `_entityType` client-side cuando el backend
- * /plan/stops todavía no lo manda.
- *
- * Operadores reportaron "ruta de solo leads y no sale el botón de Datos".
- * Causa raíz: el botón "📋 Datos" (getLeadActionVisibility en leadVisit.ts)
- * solo se pinta si `stop._entityType === 'lead'`. Como el backend aún no
- * etiqueta ese campo en la respuesta de /plan/stops, todos los stops
- * llegan con _entityType undefined y el app los trata como customers.
- *
- * Este helper aplica una heurística conservadora:
- *   1. Respeta _entityType explícito si el backend ya lo envía (forward-compat).
- *   2. Si hay `lead_id` / `_leadId` > 0, o `entity_type === 'lead'`
- *      (snake_case) → marca como 'lead'.
- *   3. Cualquier otra cosa                                → marca 'customer'.
- *
- * También normaliza `_leadId` y `_partnerId` a partir de los alias en
- * snake_case / tuple de Odoo para que leadVisit.ts y la sale screen
- * puedan operar sin asumir un shape específico.
- *
- * Seguro: si el backend ya manda _entityType correcto, este helper es
- * idempotente — devuelve el stop tal cual.
- */
-function inferEntityType(stop: any): any {
-  if (!stop || typeof stop !== 'object') return stop;
-  if (stop._entityType === 'lead' || stop._entityType === 'customer') {
-    return stop;
-  }
-
-  const entityTypeRaw =
-    typeof stop.entity_type === 'string' ? stop.entity_type.toLowerCase() : '';
-
-  const leadIdRaw = stop._leadId ?? stop.lead_id ?? null;
-  const leadId = typeof leadIdRaw === 'number' && leadIdRaw > 0 ? leadIdRaw : null;
-
-  const partnerRaw = stop._partnerId ?? stop.partner_id ?? null;
-  let partnerId: number | null = null;
-  if (Array.isArray(partnerRaw) && typeof partnerRaw[0] === 'number' && partnerRaw[0] > 0) {
-    partnerId = partnerRaw[0];
-  } else if (typeof partnerRaw === 'number' && partnerRaw > 0) {
-    partnerId = partnerRaw;
-  }
-
-  const looksLikeLead = leadId !== null || entityTypeRaw === 'lead';
-
-  return {
-    ...stop,
-    _entityType: looksLikeLead ? 'lead' : 'customer',
-    _leadId: leadId ?? stop._leadId ?? null,
-    _partnerId: partnerId ?? stop._partnerId ?? null,
-  };
-}
-
 export async function getPlanStops(planId: number): Promise<GFStop[]> {
   try {
     // BLD-20260405-021: backend wraps the response in
@@ -108,6 +55,12 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
     // wrapped payload, leaving the driver without visible stops
     // (symptom: route appears in the app but "0 paradas" counter).
     // We support both shapes so older backends still work.
+    //
+    // BLD-20260424-CLEANUP: el helper inferEntityType (BUGB) que vivía
+    // aquí se eliminó porque el backend (commit dd78489 de Sebastián)
+    // ya manda _entityType, _leadId y _partnerId directamente en cada
+    // stop. Verificado en logs de campo del 2026-04-24. El cliente
+    // ahora consume los campos del backend tal cual.
     const result = await postRest<any>(`${GF_BASE}/plan/stops`, {
       plan_id: planId,
     });
@@ -127,11 +80,9 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
 
     const rawStops = pickStops();
 
-    // BLD-20260424-BUGB: log diagnóstico temporal. Imprime los campos
-    // relevantes de los primeros 3 stops para que podamos confirmar en
-    // campo qué está mandando /plan/stops (especialmente si incluye
-    // _entityType o alguna señal de lead). Eliminar cuando el backend
-    // esté confirmado mandando _entityType en todos los casos.
+    // Log de muestreo de campos de stops. Útil para diagnóstico cuando
+    // un operador reporta que un lead aparece como customer (o vice
+    // versa). Solo dispara una vez por carga de plan, no es spammy.
     try {
       logInfo('general', 'plan_stops_sample', {
         plan_id: planId,
@@ -139,11 +90,8 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
         sample: rawStops.slice(0, 3).map((s: any) => ({
           id: s?.id,
           _entityType: s?._entityType,
-          entity_type: s?.entity_type,
           _leadId: s?._leadId,
-          lead_id: s?.lead_id,
           _partnerId: s?._partnerId,
-          partner_id: s?.partner_id,
           customer_id: s?.customer_id,
         })),
       });
@@ -151,8 +99,7 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
       // logger defensivo: nunca debe romper el plan
     }
 
-    // BLD-20260424-BUGB: inferir _entityType por cada stop antes de devolver.
-    return rawStops.map(inferEntityType) as GFStop[];
+    return rawStops as GFStop[];
   } catch (error) {
     console.warn('[gfLogistics] plan/stops failed:', error);
     return [];
