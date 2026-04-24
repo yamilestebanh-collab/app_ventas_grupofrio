@@ -68,8 +68,22 @@ export async function odooRpc<T = unknown>(
 }
 
 /**
- * Defensively try to read from a KOLD OS module.
- * Returns null if the module is not installed.
+ * BLD-20260424-KOLDACL: koldRead distingue 3 estados:
+ *   - T[]   → datos legítimos (puede ser [] si no hay registros).
+ *   - null  → endpoint NO disponible para este usuario en esta sesión
+ *             (módulo no instalado, ACL denied, error de modelo).
+ *
+ * Antes solo veía si la llamada tiraba excepción (poco común porque
+ * postRpc envuelve casi todo en HTTP 200), por lo que un ACL denied
+ * que devuelve `{ error, case: -3 }` con status 200 se traducía en
+ * `[]` y los callers (useKoldStore) creían que el módulo SÍ estaba
+ * disponible — se quedaban reintentando indefinidamente cada plan
+ * refresh, generando ruido en los logs del backend.
+ *
+ * Ahora detectamos el envelope `{ error, case }` que el módulo os_api
+ * usa para reportar fallos sin romper la cadena HTTP, y devolvemos
+ * null para que el caller sepa que tiene que apagar el módulo en
+ * memoria por el resto de la sesión.
  */
 export async function koldRead<T = unknown>(
   model: string,
@@ -78,7 +92,27 @@ export async function koldRead<T = unknown>(
   limit = 100
 ): Promise<T[] | null> {
   try {
-    return await odooRead<T>(model, domain, fields, limit);
+    // Llamada cruda para inspeccionar el envelope del backend.
+    const result = await postRpc<any>('/get_records', {
+      model, domain, fields, limit, offset: 0,
+    });
+
+    // Caso ACL/módulo: backend responde 200 con `{ error, case: -3 }`
+    // o variantes negativas. Tratamos ese envelope como "no disponible".
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      if (typeof result.error === 'string' && result.error.length > 0) {
+        return null;
+      }
+      if (typeof result.case === 'number' && result.case < 0) {
+        return null;
+      }
+    }
+
+    // Caminos normales (legacy y nuevo)
+    if (Array.isArray(result)) return result as T[];
+    if (result && Array.isArray(result.response)) return result.response as T[];
+    // Cualquier otra cosa: tratamos como NO disponible.
+    return null;
   } catch {
     // Module not installed or model doesn't exist
     return null;
