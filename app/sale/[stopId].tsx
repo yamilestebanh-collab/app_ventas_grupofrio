@@ -49,6 +49,10 @@ export default function SaleScreen() {
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const productError = useProductStore((s) => s.error);
   const loadProducts = useProductStore((s) => s.loadProducts);
+  // BLD-20260424-LOOP: pasamos productCount y lastSync al guard del
+  // useFocusEffect para evitar el loop de /truck_stock (18 reqs en 7s).
+  const productCount = useProductStore((s) => s.productCount);
+  const productsLastSync = useProductStore((s) => s.lastSync);
 
   const {
     saleLines, salePaymentMethod, salePhotoTaken,
@@ -65,10 +69,15 @@ export default function SaleScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (shouldRefreshProductsOnFocus(warehouseId, isLoadingProducts)) {
+      if (shouldRefreshProductsOnFocus(
+        warehouseId,
+        isLoadingProducts,
+        productCount,
+        productsLastSync,
+      )) {
         void loadProducts(warehouseId!);
       }
-    }, [warehouseId, isLoadingProducts, loadProducts])
+    }, [warehouseId, isLoadingProducts, productCount, productsLastSync, loadProducts])
   );
 
   if (!stop) {

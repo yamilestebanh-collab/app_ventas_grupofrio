@@ -20,18 +20,39 @@ function testSkipsAutoloadWhenAlreadyLoadedOrLoading(
   assert.equal(shouldAutoLoadProducts(12, 0, true), false);
 }
 
+type RefreshOnFocusFn = (
+  warehouseId: number | null | undefined,
+  isLoading: boolean,
+  productCount?: number,
+  lastSyncMs?: number | null,
+) => boolean;
+
 function testRefreshesOnFocusWhenWarehousePresentAndIdle(
-  shouldRefreshProductsOnFocus: (warehouseId: number | null | undefined, isLoading: boolean) => boolean,
+  shouldRefreshProductsOnFocus: RefreshOnFocusFn,
 ) {
-  assert.equal(shouldRefreshProductsOnFocus(12, false), true);
+  // Caché vacía → refresca
+  assert.equal(shouldRefreshProductsOnFocus(12, false, 0, null), true);
+  // Caché con data RANCIA (>5min) → refresca
+  assert.equal(shouldRefreshProductsOnFocus(12, false, 14, Date.now() - 10 * 60 * 1000), true);
 }
 
 function testSkipsFocusRefreshWithoutWarehouseOrWhileLoading(
-  shouldRefreshProductsOnFocus: (warehouseId: number | null | undefined, isLoading: boolean) => boolean,
+  shouldRefreshProductsOnFocus: RefreshOnFocusFn,
 ) {
-  assert.equal(shouldRefreshProductsOnFocus(null, false), false);
-  assert.equal(shouldRefreshProductsOnFocus(0, false), false);
-  assert.equal(shouldRefreshProductsOnFocus(12, true), false);
+  assert.equal(shouldRefreshProductsOnFocus(null, false, 0, null), false);
+  assert.equal(shouldRefreshProductsOnFocus(0, false, 0, null), false);
+  assert.equal(shouldRefreshProductsOnFocus(12, true, 0, null), false);
+}
+
+// BLD-20260424-LOOP: el test que rompe el loop. Caché poblada y reciente
+// NO debe refrescarse aunque el caller invoque la función múltiples veces.
+function testDoesNotRefreshWhenCacheIsFreshAndPopulated(
+  shouldRefreshProductsOnFocus: RefreshOnFocusFn,
+) {
+  // Caché con 14 productos sincronizados hace 10 segundos → NO refresca
+  assert.equal(shouldRefreshProductsOnFocus(12, false, 14, Date.now() - 10_000), false);
+  // Caché con 14 productos sin lastSync explícito → tampoco refresca
+  assert.equal(shouldRefreshProductsOnFocus(12, false, 14, null), false);
 }
 
 async function main() {
@@ -46,6 +67,7 @@ async function main() {
   testSkipsAutoloadWhenAlreadyLoadedOrLoading(productLoading.shouldAutoLoadProducts);
   testRefreshesOnFocusWhenWarehousePresentAndIdle(productLoading.shouldRefreshProductsOnFocus);
   testSkipsFocusRefreshWithoutWarehouseOrWhileLoading(productLoading.shouldRefreshProductsOnFocus);
+  testDoesNotRefreshWhenCacheIsFreshAndPopulated(productLoading.shouldRefreshProductsOnFocus);
   console.log('product loading tests: ok');
 }
 
