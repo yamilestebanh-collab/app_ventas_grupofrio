@@ -139,8 +139,14 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   },
 
   setOffrouteVisitId: (offrouteVisitId) => {
-    const currentStop = get().currentStop
-      ? { ...get().currentStop, _offrouteVisitId: offrouteVisitId }
+    // BLD-20260424-STAB: extraer get().currentStop a const local para que
+    // TypeScript narrowee correctamente. La versión anterior llamaba al
+    // getter dos veces (truthy check + spread) y TS lo trataba como
+    // GFStop|null|undefined en cada call site, lo que producía un objeto
+    // con todas las propiedades requeridas convertidas en opcionales.
+    const stop = get().currentStop;
+    const currentStop: GFStop | null = stop
+      ? { ...stop, _offrouteVisitId: offrouteVisitId }
       : null;
     set({ offrouteVisitId, currentStop });
     persistVisitState({ ...get(), offrouteVisitId, currentStop });
