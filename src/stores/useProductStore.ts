@@ -115,14 +115,38 @@ export const useProductStore = create<ProductState>((set, get) => ({
       let source: InventorySource = 'global_legacy';
 
       // ── LEVEL 1: truck_stock endpoint (BLD-013) ──
+      // BLD-20260424-BUGA: tolerar truck_stock sin stock.
+      //   Operadores reportaron "no salen productos". Causa: el endpoint
+      //   /truck_stock devuelve el catálogo pero con qty_available=0 en
+      //   todos los productos cuando el almacén no ha sincronizado stock.
+      //   Antes aceptábamos la respuesta sin más y ProductPicker filtraba
+      //   todo (line 194: `if (!isGlobalFallback && p.qty_display <= 0)`),
+      //   dejando al vendedor con pantalla vacía. Ahora distinguimos:
+      //     - scoped vacío → siguiente nivel de fallback.
+      //     - scoped con stock  → se acepta normal (truck_stock).
+      //     - scoped sin stock  → se conserva como referencia pero
+      //       se loguea warning para que operaciones sepa que el
+      //       catálogo existe pero el stock no bajó al almacén.
       const scoped = await fetchTruckStock(warehouseId);
       if (scoped && scoped.length > 0) {
+        const hasAnyStock = (scoped as any[]).some(
+          (p) => typeof p?.qty_available === 'number' && p.qty_available > 0,
+        );
         rawProducts = scoped as Product[];
         source = 'truck_stock';
-        logInfo('inventory', 'loaded_truck_stock', {
-          warehouse: warehouseId,
-          count: rawProducts.length,
-        });
+        if (hasAnyStock) {
+          logInfo('inventory', 'loaded_truck_stock', {
+            warehouse: warehouseId,
+            count: rawProducts.length,
+          });
+        } else {
+          logWarn('inventory', 'truck_stock_zero_qty', {
+            warehouse: warehouseId,
+            count: rawProducts.length,
+            message:
+              'truck_stock devolvió catálogo pero todos los productos están en 0. Mostrando como referencia (Agotado).',
+          });
+        }
       }
 
       // ── LEVEL 2: stock.quant query by warehouse ──
@@ -229,6 +253,19 @@ export const useProductStore = create<ProductState>((set, get) => ({
         totalStockKg: Math.round(totalKg),
         productCount: products.length,
         inventorySource: source,
+      });
+
+      // BLD-20260424-BUGA: resumen estructurado de la carga para poder
+      // diagnosticar en campo sin rebuild. Útil cuando el operador reporta
+      // "no salen productos" — con esta línea sabemos inmediatamente si
+      // falló la descarga, si llegó pero con 0 stock, o si hubo fallback.
+      const withStock = products.filter((p) => p.qty_available > 0).length;
+      logInfo('inventory', 'load_summary', {
+        source,
+        count: products.length,
+        withStock,
+        totalKg: Math.round(totalKg),
+        warehouseId,
       });
 
       storeSave(STORAGE_KEYS.PRODUCTS, products);
