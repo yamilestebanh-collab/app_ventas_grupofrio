@@ -166,6 +166,11 @@ export default function CheckinScreen() {
   }
 
   function handleOpenLocation() {
+    // BLD-20260424-STAB: el botón que invoca esta función solo se renderiza
+    // cuando `stop` existe, pero TypeScript no puede inferirlo desde la
+    // closure. Guard explícito para mantener tipos limpios y evitar crash
+    // en la rama imposible.
+    if (!stop) return;
     const { primaryUrl, fallbackUrl } = buildStopNavigationUrls(stop);
     if (!primaryUrl) {
       Alert.alert('Sin ubicación', 'Esta parada no tiene ubicación disponible.');

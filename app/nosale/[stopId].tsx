@@ -56,7 +56,6 @@ export default function NoSaleScreen() {
   const [selectedReasonId, setSelectedReasonId] = useState<number | null>(noSaleReasonId);
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(noSaleCompetitor);
   const [notes, setNotes] = useState(noSaleNotes);
-  const partnerId = getLeadPartnerId(stop) ?? stop.customer_id;
 
   if (!stop) {
     return (
@@ -69,6 +68,11 @@ export default function NoSaleScreen() {
     );
   }
 
+  // BLD-20260424-STAB: derived data movido a DESPUÉS del guard de stop
+  // para que TypeScript narrowee `stop` a GFStop (no GFStop|undefined).
+  // Antes del refactor de Sebastián el cálculo estaba aquí; el guard se
+  // intercaló más abajo y rompió tanto el tipo como la seguridad runtime.
+  const partnerId = getLeadPartnerId(stop) ?? stop.customer_id;
   const showCompetitor = selectedReasonId === 5; // competitor reason
   const canSave = selectedReasonId != null && noSalePhotoTaken;
   const isOffrouteVisit = !!stop._isOffroute;

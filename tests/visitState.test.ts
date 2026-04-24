@@ -8,6 +8,9 @@ interface VisitStateModule {
       customer_name: string;
       state: string;
       source_model: 'gf.route.stop';
+      // BLD-20260424-STAB: shape sincronizado con GFStop. Sebastián
+      // agregó _offrouteVisitId a GFStop pero olvidó propagarlo al test.
+      _offrouteVisitId?: number | null;
     },
     lat: number,
     lon: number,

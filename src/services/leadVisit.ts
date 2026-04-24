@@ -56,7 +56,13 @@ export function getLeadActionVisibility(
   return {
     showData: true,
     showSale: sellable,
-    showNoSale: sellable,
+    // BLD-20260424-BUGC: la "No Venta" es un evento de visita ("vine,
+    // intenté, no fue posible"), NO una transacción comercial. No
+    // requiere partner_id — el backend acepta el evento contra stop_id
+    // o visit_id directamente. Bloquearlo obligaba a los operadores a
+    // llenar Datos del lead con información falsa solo para poder
+    // avanzar la ruta. Ahora siempre disponible para leads.
+    showNoSale: true,
   };
 }
 

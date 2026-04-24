@@ -135,12 +135,16 @@ export default function OffRouteScreen() {
     visitStore.setOffrouteVisitId(offrouteVisitId);
     patchStop(virtualStopId, { _offrouteVisitId: offrouteVisitId });
 
+    // BLD-20260424-BUGC: TODOS los leads pasan por /checkin (igual que
+    // customers). Antes, los leads sin partner_id se enrutaban directo
+    // a /postvisit, saltándose el check-in y sin permitir al operador
+    // elegir "✕ No Venta" cuando el local estaba cerrado o el dueño no
+    // se encontraba. /checkin ahora muestra "📋 Datos" Y "✕ No Venta",
+    // y el operador decide según la situación real en campo. Si trae
+    // los datos del prospecto entra a Datos; si no, registra No Venta
+    // y avanza la ruta sin inventar información.
     if (result.entityType === 'lead') {
-      if (result.partnerId) {
-        router.push(`/checkin/${virtualStopId}` as never);
-        return;
-      }
-      router.push(`/postvisit/${virtualStopId}` as never);
+      router.push(`/checkin/${virtualStopId}` as never);
       return;
     }
 

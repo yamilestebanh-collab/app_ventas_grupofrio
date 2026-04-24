@@ -26,7 +26,10 @@ interface LeadVisitModule {
   }) => Record<string, unknown>;
 }
 
-function testLeadWithoutPartnerOnlyShowsData(module: LeadVisitModule) {
+function testLeadWithoutPartnerShowsDataAndNoSale(module: LeadVisitModule) {
+  // BLD-20260424-BUGC: un lead sin partner permite Datos y NO Venta,
+  // pero no Venta. La No Venta es un evento de visita ("local cerrado",
+  // "dueño ausente") y no requiere partner_id en el backend.
   const visibility = module.getLeadActionVisibility({
     _entityType: 'lead',
     _leadId: 22,
@@ -36,7 +39,7 @@ function testLeadWithoutPartnerOnlyShowsData(module: LeadVisitModule) {
   assert.deepEqual(visibility, {
     showData: true,
     showSale: false,
-    showNoSale: false,
+    showNoSale: true,
   });
 }
 
@@ -76,7 +79,7 @@ async function main() {
     new URL('../src/services/leadVisit.ts', import.meta.url).pathname
   ) as LeadVisitModule;
 
-  testLeadWithoutPartnerOnlyShowsData(module);
+  testLeadWithoutPartnerShowsDataAndNoSale(module);
   testLeadWithPartnerShowsAllActions(module);
   testApplyLeadUpsertPromotesStopToSellable(module);
   console.log('lead visit tests: ok');
