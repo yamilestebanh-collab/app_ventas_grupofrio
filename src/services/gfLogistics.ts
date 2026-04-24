@@ -378,9 +378,28 @@ export async function signOut(): Promise<void> {
 //
 // Returns `null` when the endpoint is unavailable — caller must treat
 // `null` as "fall back to existing behaviour". NEVER throws.
+/**
+ * BLD-20260424-STOCKMETA: la respuesta de /truck_stock ahora trae el flag
+ * `has_stock_data` (commit dd78489 de Sebastián). El backend lo calcula
+ * sobre el qty_map COMPLETO antes de filtrar/ordenar productos, así que
+ * representa el stock real del almacén — no la lista que llega al cliente.
+ *
+ * Significado:
+ *   - has_stock_data === true  → almacén tiene stock sincronizado
+ *   - has_stock_data === false → catálogo existe pero sin stock real
+ *
+ * El cliente lo usa para decidir si muestra los productos como
+ * "Agotado/referencia" (BUG A original) en lugar de inferir desde
+ * la heurística "todos en 0" del lado app.
+ */
+export interface TruckStockResponse {
+  products: unknown[];
+  hasStockData: boolean;
+}
+
 export async function fetchTruckStock(
   warehouseId: number | null | undefined,
-): Promise<unknown[] | null> {
+): Promise<TruckStockResponse | null> {
   try {
     const body: Record<string, unknown> = {};
     if (warehouseId && warehouseId > 0) body.warehouse_id = warehouseId;
@@ -390,7 +409,12 @@ export async function fetchTruckStock(
     const data = result.data !== undefined ? result.data : result;
     const products = (data && Array.isArray(data.products)) ? data.products : null;
     if (!products) return null;
-    return products;
+    // Si el backend no lo manda (compat), asumimos `true` (comportamiento
+    // legacy: aceptar la lista tal cual y dejar que el cliente decida).
+    const hasStockData = typeof data?.has_stock_data === 'boolean'
+      ? data.has_stock_data
+      : true;
+    return { products, hasStockData };
   } catch (error) {
     // Endpoint not deployed yet, auth issue, offline, etc.
     // We swallow so the caller transparently falls back.

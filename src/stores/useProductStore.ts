@@ -35,6 +35,18 @@ interface ProductState {
   error: string | null;
   lastSync: number | null;
   inventorySource: InventorySource | null;
+  /**
+   * BLD-20260424-STOCKMETA: viene del flag `has_stock_data` que Sebastián
+   * agregó al endpoint /truck_stock. true = el almacén tiene stock real
+   * sincronizado; false = el catálogo existe pero sin stock (situación
+   * normal cuando aún no se procesa el llenado del camión). Reemplaza la
+   * heurística client-side anterior ("todos los qty en 0 → asumir sin
+   * stock"). Si el backend no manda el flag (compat), por defecto true.
+   *
+   * null cuando no se ha hecho carga aún o cuando el source no es
+   * truck_stock (stock_quant y global_legacy no tienen este flag).
+   */
+  hasStockData: boolean | null;
 
   // Derived
   totalStockKg: number;
@@ -84,6 +96,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
   error: null,
   lastSync: null,
   inventorySource: null,
+  hasStockData: null,
   totalStockKg: 0,
   productCount: 0,
 
@@ -113,38 +126,32 @@ export const useProductStore = create<ProductState>((set, get) => ({
     try {
       let rawProducts: Product[] | null = null;
       let source: InventorySource = 'global_legacy';
+      // BLD-20260424-STOCKMETA: hasStockData arranca null (sin info).
+      // Lo poblamos solo cuando truck_stock contesta — los otros niveles
+      // de fallback (stock_quant, global) no exponen esta señal.
+      let hasStockData: boolean | null = null;
 
       // ── LEVEL 1: truck_stock endpoint (BLD-013) ──
-      // BLD-20260424-BUGA: tolerar truck_stock sin stock.
-      //   Operadores reportaron "no salen productos". Causa: el endpoint
-      //   /truck_stock devuelve el catálogo pero con qty_available=0 en
-      //   todos los productos cuando el almacén no ha sincronizado stock.
-      //   Antes aceptábamos la respuesta sin más y ProductPicker filtraba
-      //   todo (line 194: `if (!isGlobalFallback && p.qty_display <= 0)`),
-      //   dejando al vendedor con pantalla vacía. Ahora distinguimos:
-      //     - scoped vacío → siguiente nivel de fallback.
-      //     - scoped con stock  → se acepta normal (truck_stock).
-      //     - scoped sin stock  → se conserva como referencia pero
-      //       se loguea warning para que operaciones sepa que el
-      //       catálogo existe pero el stock no bajó al almacén.
+      // BLD-20260424-STOCKMETA: la decisión "este catálogo no tiene stock
+      // sincronizado en el almacén" ahora la determina el backend vía el
+      // flag `has_stock_data` (commit dd78489 de Sebastián). El cliente
+      // solo lo lee y lo expone al store; ProductPicker decide la UI.
       const scoped = await fetchTruckStock(warehouseId);
-      if (scoped && scoped.length > 0) {
-        const hasAnyStock = (scoped as any[]).some(
-          (p) => typeof p?.qty_available === 'number' && p.qty_available > 0,
-        );
-        rawProducts = scoped as Product[];
+      if (scoped && scoped.products.length > 0) {
+        rawProducts = scoped.products as Product[];
         source = 'truck_stock';
-        if (hasAnyStock) {
+        hasStockData = scoped.hasStockData;
+        if (hasStockData) {
           logInfo('inventory', 'loaded_truck_stock', {
             warehouse: warehouseId,
             count: rawProducts.length,
           });
         } else {
-          logWarn('inventory', 'truck_stock_zero_qty', {
+          logWarn('inventory', 'truck_stock_no_stock_data', {
             warehouse: warehouseId,
             count: rawProducts.length,
             message:
-              'truck_stock devolvió catálogo pero todos los productos están en 0. Mostrando como referencia (Agotado).',
+              'Backend reporta has_stock_data=false: catálogo existe pero el almacén aún no tiene stock sincronizado. Mostrando como referencia.',
           });
         }
       }
@@ -253,6 +260,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
         totalStockKg: Math.round(totalKg),
         productCount: products.length,
         inventorySource: source,
+        hasStockData,
       });
 
       // BLD-20260424-BUGA: resumen estructurado de la carga para poder
@@ -262,6 +270,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
       const withStock = products.filter((p) => p.qty_available > 0).length;
       logInfo('inventory', 'load_summary', {
         source,
+        hasStockData,
         count: products.length,
         withStock,
         totalKg: Math.round(totalKg),
@@ -312,6 +321,6 @@ export const useProductStore = create<ProductState>((set, get) => ({
   reset: () => set({
     products: [], isLoading: false, error: null,
     lastSync: null, totalStockKg: 0, productCount: 0,
-    inventorySource: null,
+    inventorySource: null, hasStockData: null,
   }),
 }));
