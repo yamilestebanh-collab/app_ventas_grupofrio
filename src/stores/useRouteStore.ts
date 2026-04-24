@@ -40,7 +40,12 @@ interface RouteState {
   addVirtualStop: (
     customerId: number,
     customerName: string,
-    opts?: { entityType?: 'customer' | 'lead'; leadId?: number | null; partnerId?: number | null },
+    opts?: {
+      entityType?: 'customer' | 'lead';
+      leadId?: number | null;
+      partnerId?: number | null;
+      offrouteVisitId?: number | null;
+    },
   ) => number;
   patchStop: (stopId: number, patch: Partial<GFStop>) => void;
   reset: () => void;
@@ -151,6 +156,7 @@ export const useRouteStore = create<RouteState>((set, get) => ({
       entityType: opts?.entityType,
       leadId: opts?.leadId,
       partnerId: opts?.partnerId,
+      offrouteVisitId: opts?.offrouteVisitId,
     });
     const virtualId = virtualStop.id;
     const stops = [...get().stops, virtualStop];

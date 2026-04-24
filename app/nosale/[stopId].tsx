@@ -17,7 +17,7 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { takePhoto } from '../../src/services/camera';
 import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildCheckoutPayload } from '../../src/services/checkoutResult';
-import { checkOut, reportIncident } from '../../src/services/gfLogistics';
+import { checkOut, closeOffrouteVisit, reportIncident } from '../../src/services/gfLogistics';
 import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
@@ -41,11 +41,12 @@ export default function NoSaleScreen() {
   const stops = useRouteStore((s) => s.stops);
   const stop = stops.find((s) => s.id === Number(stopId));
   const updateStopState = useRouteStore((s) => s.updateStopState);
+  const removeStop = useRouteStore((s) => s.removeStop);
 
   const {
     noSaleReasonId, noSaleCompetitor, noSaleNotes, noSalePhotoTaken,
     setNoSaleReason, setNoSaleCompetitor, setNoSaleNotes, setNoSalePhoto,
-    setPhase, resetVisit,
+    setPhase, resetVisit, offrouteVisitId,
   } = useVisitStore();
 
   const enqueue = useSyncStore((s) => s.enqueue);
@@ -70,11 +71,16 @@ export default function NoSaleScreen() {
 
   const showCompetitor = selectedReasonId === 5; // competitor reason
   const canSave = selectedReasonId != null && noSalePhotoTaken;
+  const isOffrouteVisit = !!stop._isOffroute;
 
   function finalizeNoSaleLocally() {
     captureAndEnqueueGpsPoint('checkout').catch(() => {});
     setGpsMode('in_transit');
-    updateStopState(stop!.id, 'done');
+    if (stop!._isOffroute) {
+      removeStop(stop!.id);
+    } else {
+      updateStopState(stop!.id, 'done');
+    }
     setPhase('checked_out');
     resetVisit();
     router.replace('/(tabs)' as never);
@@ -93,6 +99,51 @@ export default function NoSaleScreen() {
     const reason = NO_SALE_REASONS.find((r) => r.id === selectedReasonId);
     setNoSaleReason(selectedReasonId!, reason?.label || '');
     setNoSaleNotes(notes);
+
+    if (isOffrouteVisit) {
+      const closePayload = offrouteVisitId
+        ? {
+            visit_id: offrouteVisitId,
+            result_status: 'no_sale' as const,
+            latitude: latitude || 0,
+            longitude: longitude || 0,
+            notes: `No venta: ${reason?.code || ''} ${notes || ''}`.trim(),
+          }
+        : null;
+
+      if (!isOnline) {
+        if (closePayload) {
+          enqueue('offroute_visit_close', {
+            ...closePayload,
+            timestamp: Date.now(),
+          });
+        }
+        finalizeNoSaleLocally();
+        return;
+      }
+
+      if (closePayload) {
+        try {
+          await closeOffrouteVisit(closePayload);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
+          if (isRetryableSyncErrorMessage(message)) {
+            enqueue('offroute_visit_close', {
+              ...closePayload,
+              timestamp: Date.now(),
+            });
+          } else {
+            Alert.alert(
+              'Cierre pendiente en servidor',
+              'La visita especial se cerrará solo localmente porque backend rechazó el cierre.',
+            );
+          }
+        }
+      }
+
+      finalizeNoSaleLocally();
+      return;
+    }
 
     const noSaleId = enqueue('no_sale', {
       stop_id: stop.id,

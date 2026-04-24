@@ -20,7 +20,7 @@ import { useLocationStore } from '../../src/stores/useLocationStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatElapsed } from '../../src/utils/time';
-import { checkIn } from '../../src/services/gfLogistics';
+import { checkIn, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { initializeGPS, getCurrentPosition, setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { deriveVisitGuard } from '../../src/services/visitGuards';
 import { buildStopNavigationUrls } from '../../src/services/locationNavigation';
@@ -38,7 +38,7 @@ export default function CheckinScreen() {
 
   const {
     phase, currentStopId, checkInTime, elapsedSeconds,
-    startVisit, tickTimer,
+    startVisit, tickTimer, offrouteVisitId,
   } = useVisitStore();
 
   const {
@@ -55,6 +55,7 @@ export default function CheckinScreen() {
 
   const [gpsLoading, setGpsLoading] = useState(true);
   const [checkingIn, setCheckingIn] = useState(false); // Prevent double-tap
+  const isOffrouteVisit = !!stop?._isOffroute;
 
   // Timer tick
   useEffect(() => {
@@ -180,6 +181,62 @@ export default function CheckinScreen() {
       }
       Alert.alert('Error', 'No se pudo abrir la ubicación.');
     });
+  }
+
+  function handleCloseSpecialVisit() {
+    if (!stop || !stop._isOffroute) return;
+    Alert.alert(
+      'Cerrar visita especial',
+      'Esta visita especial solo existe localmente en la app. Se cerrará y ya podrás abrir otra visita.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Cerrar visita',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              const closePayload = offrouteVisitId
+                ? {
+                    visit_id: offrouteVisitId,
+                    result_status: 'cancelled' as const,
+                    latitude: latitude || 0,
+                    longitude: longitude || 0,
+                  }
+                : null;
+              if (closePayload) {
+                if (!isOnline) {
+                  enqueue('offroute_visit_close', {
+                    ...closePayload,
+                    timestamp: Date.now(),
+                  });
+                } else {
+                  try {
+                    await closeOffrouteVisit(closePayload);
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
+                    if (isRetryableSyncErrorMessage(message)) {
+                      enqueue('offroute_visit_close', {
+                        ...closePayload,
+                        timestamp: Date.now(),
+                      });
+                    } else {
+                      Alert.alert(
+                        'Cierre pendiente en servidor',
+                        'La visita especial se cerrará solo localmente porque backend rechazó el cierre.',
+                      );
+                    }
+                  }
+                }
+              }
+              useRouteStore.getState().removeStop(stop.id);
+              useVisitStore.getState().resetVisit();
+              setGpsMode('in_transit');
+              router.replace('/(tabs)' as never);
+            })();
+          },
+        },
+      ],
+    );
   }
 
   if (!stop) {
@@ -410,6 +467,16 @@ export default function CheckinScreen() {
           onPress={handleOpenLocation}
           fullWidth
         />
+
+        {isOffrouteVisit ? (
+          <Button
+            label="Cerrar visita especial"
+            variant="danger"
+            onPress={handleCloseSpecialVisit}
+            fullWidth
+            style={{ marginTop: 8 }}
+          />
+        ) : null}
 
         {/* Quick context card */}
         <Text style={styles.sectionTitle}>CONTEXTO RAPIDO</Text>

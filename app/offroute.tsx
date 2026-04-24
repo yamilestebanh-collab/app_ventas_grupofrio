@@ -23,8 +23,16 @@ import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography } from '../src/theme/typography';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useVisitStore } from '../src/stores/useVisitStore';
+import { useSyncStore } from '../src/stores/useSyncStore';
+import { useAuthStore } from '../src/stores/useAuthStore';
+import { useLocationStore } from '../src/stores/useLocationStore';
 import { useAsyncRefresh } from '../src/hooks/useAsyncRefresh';
 import { OffrouteSearchResult, searchOffrouteEntities } from '../src/services/offrouteSearch';
+import { startOffrouteVisit } from '../src/services/gfLogistics';
+import { extractOffrouteVisitId } from '../src/services/offrouteVisit';
+import { isRetryableSyncErrorMessage } from '../src/utils/syncFailure';
+
+const DEFAULT_OFFROUTE_COMPANY_ID = 34;
 
 export default function OffRouteScreen() {
   const router = useRouter();
@@ -34,6 +42,11 @@ export default function OffRouteScreen() {
   const [hasSearched, setHasSearched] = useState(false);
   const addVirtualStop = useRouteStore((s) => s.addVirtualStop);
   const updateStopState = useRouteStore((s) => s.updateStopState);
+  const patchStop = useRouteStore((s) => s.patchStop);
+  const isOnline = useSyncStore((s) => s.isOnline);
+  const companyId = useAuthStore((s) => s.companyId);
+  const latitude = useLocationStore((s) => s.latitude);
+  const longitude = useLocationStore((s) => s.longitude);
 
   const doSearch = useCallback(async () => {
     const q = search.trim();
@@ -61,7 +74,34 @@ export default function OffRouteScreen() {
   }, [doSearch, hasSearched, search]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshSearch);
 
-  function handleSelect(result: OffrouteSearchResult) {
+  async function handleSelect(result: OffrouteSearchResult) {
+    let offrouteVisitId: number | null = null;
+
+    if (isOnline) {
+      try {
+        const visit = await startOffrouteVisit({
+          partner_id: result.partnerId ?? null,
+          lead_id: result.entityType === 'lead' ? result.id : null,
+          company_id: companyId ?? DEFAULT_OFFROUTE_COMPANY_ID,
+          latitude,
+          longitude,
+        });
+        offrouteVisitId = extractOffrouteVisitId(
+          visit && typeof visit === 'object' ? (visit.id as number | null | undefined) : null,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'No se pudo iniciar la visita especial.';
+        if (!isRetryableSyncErrorMessage(message)) {
+          Alert.alert('Visita especial rechazada', message);
+          return;
+        }
+        Alert.alert(
+          'Visita especial local',
+          'No se pudo registrar la visita especial en servidor. Continuará solo localmente.',
+        );
+      }
+    }
+
     const virtualStopId = addVirtualStop(
       result.partnerId ?? result.id,
       result.name,
@@ -69,6 +109,7 @@ export default function OffRouteScreen() {
         entityType: result.entityType,
         leadId: result.entityType === 'lead' ? result.id : null,
         partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
+        offrouteVisitId,
       },
     );
     updateStopState(virtualStopId, 'in_progress');
@@ -87,9 +128,12 @@ export default function OffRouteScreen() {
         _isOffroute: true,
         _leadId: result.entityType === 'lead' ? result.id : null,
         _partnerId: result.entityType === 'lead' ? result.partnerId : result.id,
+        _offrouteVisitId: offrouteVisitId,
       },
       0, 0, // lat/lon — GPS will provide real values if available
     );
+    visitStore.setOffrouteVisitId(offrouteVisitId);
+    patchStop(virtualStopId, { _offrouteVisitId: offrouteVisitId });
 
     if (result.entityType === 'lead') {
       if (result.partnerId) {
@@ -109,7 +153,7 @@ export default function OffRouteScreen() {
     return (
       <TouchableOpacity
         style={styles.customerCard}
-        onPress={() => handleSelect(item)}
+        onPress={() => { void handleSelect(item); }}
         activeOpacity={0.7}
       >
         <View style={{ flex: 1 }}>

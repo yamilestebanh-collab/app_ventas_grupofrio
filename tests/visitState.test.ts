@@ -16,6 +16,7 @@ interface VisitStateModule {
     phase: 'checked_in';
     currentStopId: number;
     currentStop: { id: number; customer_name: string };
+    offrouteVisitId: number | null;
     checkInTime: number;
     checkInLat: number;
     checkInLon: number;
@@ -44,6 +45,7 @@ function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateMod
     customer_name: 'Cliente Ruta',
     state: 'in_progress',
     source_model: 'gf.route.stop',
+    _offrouteVisitId: 12345,
   }, 20.1, -103.4, 123456789);
 
   assert.equal(started.phase, 'checked_in');
@@ -51,6 +53,7 @@ function testStartedVisitBeginsFromCleanTransactionalState(module: VisitStateMod
   assert.equal(started.checkInTime, 123456789);
   assert.equal(started.checkInLat, 20.1);
   assert.equal(started.checkInLon, -103.4);
+  assert.equal(started.offrouteVisitId, 12345);
   assert.equal(started.elapsedSeconds, 0);
   assert.deepEqual(started.saleLines, []);
   assert.equal(started.salePaymentMethod, null);

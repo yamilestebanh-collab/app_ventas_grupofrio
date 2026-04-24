@@ -28,6 +28,7 @@ interface VisitState {
   phase: VisitPhase;
   currentStopId: number | null;
   currentStop: GFStop | null;
+  offrouteVisitId: number | null;
 
   // Check-in data
   checkInTime: number | null; // timestamp ms
@@ -55,6 +56,7 @@ interface VisitState {
   startVisit: (stop: GFStop, lat: number, lon: number) => void;
   endVisit: (lat: number, lon: number) => void;
   setPhase: (phase: VisitPhase) => void;
+  setOffrouteVisitId: (offrouteVisitId: number | null) => void;
 
   // Sale actions
   addSaleLine: (line: SaleLineItem) => void;
@@ -103,6 +105,7 @@ function persistVisitState(state: {
   phase: VisitPhase;
   currentStopId: number | null;
   currentStop: GFStop | null;
+  offrouteVisitId: number | null;
   checkInTime: number | null;
   checkInLat: number | null;
   checkInLon: number | null;
@@ -133,6 +136,14 @@ export const useVisitStore = create<VisitState>((set, get) => ({
   setPhase: (phase) => {
     set({ phase });
     persistVisitState({ ...get(), phase });
+  },
+
+  setOffrouteVisitId: (offrouteVisitId) => {
+    const currentStop = get().currentStop
+      ? { ...get().currentStop, _offrouteVisitId: offrouteVisitId }
+      : null;
+    set({ offrouteVisitId, currentStop });
+    persistVisitState({ ...get(), offrouteVisitId, currentStop });
   },
 
   // Sale
@@ -193,6 +204,7 @@ export const useVisitStore = create<VisitState>((set, get) => ({
       phase: snapshot.phase,
       currentStopId: snapshot.currentStopId,
       currentStop: snapshot.currentStop,
+      offrouteVisitId: snapshot.offrouteVisitId,
       checkInTime: snapshot.checkInTime,
       checkInLat: snapshot.checkInLat,
       checkInLon: snapshot.checkInLon,

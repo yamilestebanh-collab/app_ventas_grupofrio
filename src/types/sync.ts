@@ -18,6 +18,7 @@ export type SyncItemType =
   | 'no_sale'
   | 'payment'
   | 'prospection'
+  | 'offroute_visit_close'
   | 'gps'
   // V2 additions:
   | 'collection'
@@ -57,6 +58,7 @@ export const SYNC_PRIORITY_MAP: Record<SyncItemType, SyncPriority> = {
   customer_create: 1,
   customer_update: 1,
   prospection: 1,
+  offroute_visit_close: 1,
   photo: 2,
   gps: 3,
 };

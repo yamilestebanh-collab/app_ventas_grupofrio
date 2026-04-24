@@ -28,6 +28,7 @@ export interface CreateVirtualStopInput {
   entityType?: 'customer' | 'lead';
   leadId?: number | null;
   partnerId?: number | null;
+  offrouteVisitId?: number | null;
   /** Only overridden by tests — production always uses Date.now(). */
   now?: number;
 }
@@ -48,6 +49,7 @@ export function createVirtualStop(input: CreateVirtualStopInput): GFStop {
     _isOffroute: true,
     _leadId: input.leadId ?? null,
     _partnerId: input.partnerId ?? null,
+    _offrouteVisitId: input.offrouteVisitId ?? null,
     _virtualCreatedAt: now,
   };
 }

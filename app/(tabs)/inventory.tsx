@@ -3,10 +3,10 @@
  * Truck stock overview, product list, action buttons.
  */
 
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
@@ -17,6 +17,7 @@ import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { formatPriceWithIVA } from '../../src/utils/time';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
+import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 
 export default function InventoryScreen() {
   const router = useRouter();
@@ -30,11 +31,13 @@ export default function InventoryScreen() {
   }, [warehouseId, loadProducts]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshInventory);
 
-  useEffect(() => {
-    if (warehouseId && products.length === 0) {
-      loadProducts(warehouseId);
-    }
-  }, [warehouseId]);
+  useFocusEffect(
+    useCallback(() => {
+      if (shouldRefreshProductsOnFocus(warehouseId, isLoading)) {
+        void loadProducts(warehouseId!);
+      }
+    }, [warehouseId, isLoading, loadProducts])
+  );
 
   // Forecast total for route (F5: real aggregation)
   const forecastKg = 0; // Placeholder until KoldDemand integration

@@ -43,7 +43,9 @@ import {
   createSale,
   createPayment,
   upsertLeadData,
+  closeOffrouteVisit,
 } from '../services/gfLogistics';
+import { OffrouteVisitResultStatus } from '../services/offrouteVisit';
 import { CheckoutResultStatus } from '../services/checkoutResult';
 import { buildPaymentsCreatePayload, buildSalesCreatePayload } from '../services/gfLogisticsContracts';
 import { useProductStore } from './useProductStore';
@@ -804,6 +806,16 @@ async function processSyncItem(item: SyncQueueItem): Promise<void> {
 
     case 'prospection':
       await upsertLeadData(payload as Record<string, unknown>, meta);
+      break;
+
+    case 'offroute_visit_close':
+      await closeOffrouteVisit({
+        visit_id: payload.visit_id,
+        result_status: payload.result_status as OffrouteVisitResultStatus,
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        notes: payload.notes,
+      }, meta);
       break;
 
     // V2 types — basic dispatchers. Payloads follow the same

@@ -50,6 +50,7 @@ export interface GFStop {
   _isOffroute?: boolean;
   _leadId?: number | null;
   _partnerId?: number | null;
+  _offrouteVisitId?: number | null;
   // Milliseconds since epoch. Stamped by addVirtualStop() so a plan
   // refresh can preserve in-flight offroute drafts without accumulating
   // orphaned entries forever — see offrouteDrafts.ts for the TTL.

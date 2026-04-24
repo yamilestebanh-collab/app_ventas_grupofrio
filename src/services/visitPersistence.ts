@@ -5,6 +5,7 @@ export interface PersistedVisitSnapshot {
   phase: VisitPhase;
   currentStopId: number;
   currentStop: GFStop;
+  offrouteVisitId: number | null;
   checkInTime: number;
   checkInLat: number | null;
   checkInLon: number | null;
@@ -15,6 +16,7 @@ interface BuildVisitSnapshotInput {
   phase: VisitPhase;
   currentStopId: number | null;
   currentStop: GFStop | null;
+  offrouteVisitId: number | null;
   checkInTime: number | null;
   checkInLat: number | null;
   checkInLon: number | null;
@@ -26,6 +28,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     phase,
     currentStopId,
     currentStop,
+    offrouteVisitId,
     checkInTime,
     checkInLat,
     checkInLon,
@@ -39,6 +42,7 @@ export function buildVisitSnapshot(input: BuildVisitSnapshotInput): PersistedVis
     phase,
     currentStopId,
     currentStop,
+    offrouteVisitId,
     checkInTime,
     checkInLat,
     checkInLon,

@@ -4,6 +4,7 @@ export interface VisitDataState {
   phase: 'idle' | 'checked_in' | 'selling' | 'no_selling' | 'checked_out';
   currentStopId: number | null;
   currentStop: GFStop | null;
+  offrouteVisitId: number | null;
   checkInTime: number | null;
   checkInLat: number | null;
   checkInLon: number | null;
@@ -29,6 +30,7 @@ export function createInitialVisitState(): VisitDataState {
     phase: 'idle',
     currentStopId: null,
     currentStop: null,
+    offrouteVisitId: null,
     checkInTime: null,
     checkInLat: null,
     checkInLon: null,
@@ -61,6 +63,7 @@ export function buildStartedVisitState(
     phase: 'checked_in',
     currentStopId: stop.id,
     currentStop: stop,
+    offrouteVisitId: stop._offrouteVisitId ?? null,
     checkInTime: now,
     checkInLat: lat,
     checkInLon: lon,

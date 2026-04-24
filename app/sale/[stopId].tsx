@@ -3,10 +3,10 @@
  * Product lines with +/- qty, totals, payment method, mandatory photo.
  */
 
-import React, { useEffect } from 'react';
+import React, { useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
@@ -18,10 +18,10 @@ import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { SaveIndicator } from '../../src/components/ui/SaveIndicator';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useLocationStore } from '../../src/stores/useLocationStore';
 import { formatCurrency, formatPriceWithIVA } from '../../src/utils/time';
 import { takePhoto } from '../../src/services/camera';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
-import { shouldAutoLoadProducts } from '../../src/utils/productLoading';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
 import {
   getCompanyFallbackPricelistId,
@@ -31,6 +31,9 @@ import {
 import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
 import { logInfo } from '../../src/utils/logger';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
+import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
+import { closeOffrouteVisit } from '../../src/services/gfLogistics';
+import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 
 export default function SaleScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -50,18 +53,23 @@ export default function SaleScreen() {
   const {
     saleLines, salePaymentMethod, salePhotoTaken,
     updateSaleQty, setSalePayment,
-    saleSubtotal, saleTax, saleTotal, saleTotalKg, resetVisit,
+    saleSubtotal, saleTax, saleTotal, saleTotalKg, resetVisit, offrouteVisitId,
   } = useVisitStore();
 
   const enqueue = useSyncStore((s) => s.enqueue);
+  const isOnline = useSyncStore((s) => s.isOnline);
+  const latitude = useLocationStore((s) => s.latitude);
+  const longitude = useLocationStore((s) => s.longitude);
 
   const [pickerVisible, setPickerVisible] = React.useState(false);
 
-  useEffect(() => {
-    if (shouldAutoLoadProducts(warehouseId, products.length, isLoadingProducts)) {
-      loadProducts(warehouseId!);
-    }
-  }, [warehouseId, products.length, isLoadingProducts, loadProducts]);
+  useFocusEffect(
+    useCallback(() => {
+      if (shouldRefreshProductsOnFocus(warehouseId, isLoadingProducts)) {
+        void loadProducts(warehouseId!);
+      }
+    }, [warehouseId, isLoadingProducts, loadProducts])
+  );
 
   if (!stop) {
     return (
@@ -173,6 +181,39 @@ export default function SaleScreen() {
     saleLines.forEach((l) => updateLocalStock(l.productId, -l.qty));
 
     if (shouldSkipStopCheckout(stop.id)) {
+      const closePayload = offrouteVisitId
+        ? {
+            visit_id: offrouteVisitId,
+            result_status: 'sale' as const,
+            latitude: latitude || 0,
+            longitude: longitude || 0,
+          }
+        : null;
+      if (closePayload) {
+        if (!isOnline) {
+          enqueue('offroute_visit_close', {
+            ...closePayload,
+            timestamp: Date.now(),
+          }, { dependsOn: [saleSyncId] });
+        } else {
+          try {
+            await closeOffrouteVisit(closePayload);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
+            if (isRetryableSyncErrorMessage(message)) {
+              enqueue('offroute_visit_close', {
+                ...closePayload,
+                timestamp: Date.now(),
+              }, { dependsOn: [saleSyncId] });
+            } else {
+              Alert.alert(
+                'Cierre pendiente en servidor',
+                'La venta se guardó localmente, pero la visita especial no se pudo cerrar en backend.',
+              );
+            }
+          }
+        }
+      }
       removeStop(stop.id);
       resetVisit();
       router.replace('/(tabs)' as never);

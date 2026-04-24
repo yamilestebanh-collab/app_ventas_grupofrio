@@ -235,6 +235,30 @@ export async function upsertLeadData(
   return lead && typeof lead === 'object' ? lead : null;
 }
 
+export async function startOffrouteVisit(
+  payload: Record<string, unknown>,
+  meta?: ClientEventMeta | null,
+): Promise<Record<string, unknown> | null> {
+  const body = attachClientMetaToRestPayload(payload, meta ?? null);
+  const result = await postRest<any>(`${GF_BASE}/offroute/visit/start`, body);
+  if (!result || typeof result !== 'object') return null;
+  const data = result.data !== undefined ? result.data : result;
+  const visit = data?.visit ?? data;
+  return visit && typeof visit === 'object' ? visit : null;
+}
+
+export async function closeOffrouteVisit(
+  payload: Record<string, unknown>,
+  meta?: ClientEventMeta | null,
+): Promise<Record<string, unknown> | null> {
+  const body = attachClientMetaToRestPayload(payload, meta ?? null);
+  const result = await postRest<any>(`${GF_BASE}/offroute/visit/close`, body);
+  if (!result || typeof result !== 'object') return null;
+  const data = result.data !== undefined ? result.data : result;
+  const visit = data?.visit ?? data;
+  return visit && typeof visit === 'object' ? visit : null;
+}
+
 // ═══ Session ═══
 
 export async function signOut(): Promise<void> {

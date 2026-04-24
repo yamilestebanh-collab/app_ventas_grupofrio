@@ -19,9 +19,10 @@ import { typography } from '../../src/theme/typography';
 import { useRouteStore } from '../../src/stores/useRouteStore';
 import { useVisitStore } from '../../src/stores/useVisitStore';
 import { useSyncStore } from '../../src/stores/useSyncStore';
+import { useLocationStore } from '../../src/stores/useLocationStore';
 import { buildPostvisitPayload } from '../../src/services/postvisitPayload';
 import { useAuthStore } from '../../src/stores/useAuthStore';
-import { fetchLeadStages, upsertLeadData } from '../../src/services/gfLogistics';
+import { closeOffrouteVisit, fetchLeadStages, upsertLeadData } from '../../src/services/gfLogistics';
 import { applyLeadUpsertToStop, LeadStageOption } from '../../src/services/leadVisit';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 
@@ -47,7 +48,10 @@ export default function ProspeccionScreen() {
   const enqueue = useSyncStore((s) => s.enqueue);
   const isOnline = useSyncStore((s) => s.isOnline);
   const resetVisit = useVisitStore((s) => s.resetVisit);
+  const offrouteVisitId = useVisitStore((s) => s.offrouteVisitId);
   const companyId = useAuthStore((s) => s.companyId);
+  const latitude = useLocationStore((s) => s.latitude);
+  const longitude = useLocationStore((s) => s.longitude);
 
   const [contactName, setContactName] = useState('');
   const [phone, setPhone] = useState('');
@@ -120,6 +124,61 @@ export default function ProspeccionScreen() {
 
   function finalizeAfterSave() {
     router.replace(`/checkin/${currentStop.id}` as never);
+  }
+
+  function handleCloseSpecialVisit() {
+    if (!currentStop._isOffroute) return;
+    Alert.alert(
+      'Cerrar visita especial',
+      'Esta visita especial solo existe localmente en la app. Se cerrará y ya podrás abrir otra visita.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Cerrar visita',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              const closePayload = offrouteVisitId
+                ? {
+                    visit_id: offrouteVisitId,
+                    result_status: 'lead_data' as const,
+                    latitude: latitude || 0,
+                    longitude: longitude || 0,
+                  }
+                : null;
+              if (closePayload) {
+                if (!isOnline) {
+                  enqueue('offroute_visit_close', {
+                    ...closePayload,
+                    timestamp: Date.now(),
+                  });
+                } else {
+                  try {
+                    await closeOffrouteVisit(closePayload);
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
+                    if (isRetryableSyncErrorMessage(message)) {
+                      enqueue('offroute_visit_close', {
+                        ...closePayload,
+                        timestamp: Date.now(),
+                      });
+                    } else {
+                      Alert.alert(
+                        'Cierre pendiente en servidor',
+                        'La visita especial se cerrará solo localmente porque backend rechazó el cierre.',
+                      );
+                    }
+                  }
+                }
+              }
+              removeStop(currentStop.id);
+              resetVisit();
+              router.replace('/(tabs)' as never);
+            })();
+          },
+        },
+      ],
+    );
   }
 
   async function handleSave() {
@@ -320,6 +379,16 @@ export default function ProspeccionScreen() {
           loading={saving}
           style={{ marginTop: 16 }}
         />
+
+        {currentStop._isOffroute ? (
+          <Button
+            label="Cerrar visita especial"
+            variant="danger"
+            onPress={handleCloseSpecialVisit}
+            fullWidth
+            style={{ marginTop: 8 }}
+          />
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
