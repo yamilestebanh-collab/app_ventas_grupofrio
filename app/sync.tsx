@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { TopBar } from '../src/components/ui/TopBar';
 import { Button } from '../src/components/ui/Button';
@@ -33,11 +33,41 @@ const statusBadge: Record<string, { label: string; variant: 'yellow' | 'green' |
 };
 
 export default function SyncScreen() {
-  const { queue, isOnline, isSyncing, pendingCount, errorCount, processQueue, clearDone } = useSyncStore();
+  const {
+    queue, isOnline, isSyncing, pendingCount, errorCount, deadCount,
+    processQueue, clearDone, clearDead,
+  } = useSyncStore();
 
   const pending = queue.filter((i) => i.status === 'pending' || i.status === 'syncing');
   const errors = queue.filter((i) => i.status === 'error');
+  const dead = queue.filter((i) => i.status === 'dead');
   const done = queue.filter((i) => i.status === 'done').slice(-10); // Last 10
+
+  // BLD-20260424-PURGE: handler con confirmación. Los items dead suelen
+  // ser residuos históricos (ventas viejas con shape obsoleto, GPS sin
+  // red, etc.) que ya no van a sincronizar y solo ensucian el SyncBar.
+  // La confirmación evita borrados accidentales.
+  function handleClearDead() {
+    if (deadCount === 0) return;
+    Alert.alert(
+      'Limpiar historial de errores',
+      `Se eliminarán ${deadCount} operación(es) que fallaron permanentemente y ya no volverán a intentarse. Esta acción no se puede deshacer.\n\n¿Continuar?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Limpiar',
+          style: 'destructive',
+          onPress: () => {
+            const removed = clearDead();
+            Alert.alert(
+              'Historial limpio',
+              `Se eliminaron ${removed} operación(es) fallidas. La alerta roja desaparecerá en cuanto se actualice la pantalla.`,
+            );
+          },
+        },
+      ],
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -54,7 +84,7 @@ export default function SyncScreen() {
         </View>
 
         {/* Actions */}
-        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 14 }}>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
           <Button
             label="🔄 Reintentar"
             variant="primary"
@@ -64,13 +94,28 @@ export default function SyncScreen() {
             style={{ flex: 1 }}
           />
           <Button
-            label="🗑 Limpiar"
+            label="🗑 Limpiar completados"
             variant="secondary"
             small
             onPress={() => clearDone()}
             style={{ flex: 1 }}
           />
         </View>
+
+        {/* BLD-20260424-PURGE: botón visible y diferenciado para limpiar
+            items DEAD. Solo aparece cuando hay items fallidos permanentemente
+            para no añadir ruido cuando la cola está sana. */}
+        {deadCount > 0 ? (
+          <Button
+            label={`🚮 Limpiar Historial de Errores (${deadCount})`}
+            variant="danger"
+            onPress={handleClearDead}
+            fullWidth
+            style={{ marginBottom: 14 }}
+          />
+        ) : (
+          <View style={{ marginBottom: 6 }} />
+        )}
 
         {/* Pending */}
         {pending.length > 0 && (
@@ -82,11 +127,27 @@ export default function SyncScreen() {
           </>
         )}
 
-        {/* Errors */}
+        {/* Errors (con reintentos pendientes) */}
         {errors.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>CON ERROR ({errors.length})</Text>
             {errors.map((item) => (
+              <SyncItem key={item.id} item={item} />
+            ))}
+          </>
+        )}
+
+        {/* BLD-20260424-PURGE: items DEAD agrupados por separado.
+            Estos ya agotaron sus reintentos y no se van a sincronizar
+            nunca más. Mostrarlos visibles motiva al operador a usar el
+            botón de limpiar arriba. */}
+        {dead.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>FALLIDOS PERMANENTEMENTE ({dead.length})</Text>
+            <Text style={styles.deadHint}>
+              Estas operaciones agotaron sus reintentos. Usa "Limpiar Historial" arriba para borrarlas y quitar la alerta roja.
+            </Text>
+            {dead.map((item) => (
               <SyncItem key={item.id} item={item} />
             ))}
           </>
@@ -169,6 +230,10 @@ const styles = StyleSheet.create({
   iconDone: { backgroundColor: colors.successAlpha12 },
   syncLabel: { fontSize: 13, fontWeight: '600', color: colors.text },
   syncTime: { fontSize: 11, color: colors.textDim },
+  deadHint: {
+    fontSize: 11, color: colors.textDim, fontStyle: 'italic',
+    marginBottom: 8, lineHeight: 15,
+  },
   emptyCard: {
     backgroundColor: colors.card, borderRadius: radii.card,
     padding: 30, alignItems: 'center', marginTop: 20,

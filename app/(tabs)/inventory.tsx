@@ -24,6 +24,7 @@ export default function InventoryScreen() {
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const {
     products, totalStockKg, isLoading, error, loadProducts,
+    productCount, lastSync: productsLastSync,
   } = useProductStore();
   const refreshInventory = useCallback(async () => {
     if (!warehouseId) return;
@@ -31,12 +32,16 @@ export default function InventoryScreen() {
   }, [warehouseId, loadProducts]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshInventory);
 
+  // BLD-20260424-LOOP: ver nota en productLoading.ts. Pasamos productCount
+  // y lastSync para evitar el ciclo de re-fetch en cada cambio de loading.
   useFocusEffect(
     useCallback(() => {
-      if (shouldRefreshProductsOnFocus(warehouseId, isLoading)) {
+      if (shouldRefreshProductsOnFocus(
+        warehouseId, isLoading, productCount, productsLastSync,
+      )) {
         void loadProducts(warehouseId!);
       }
-    }, [warehouseId, isLoading, loadProducts])
+    }, [warehouseId, isLoading, productCount, productsLastSync, loadProducts])
   );
 
   // Forecast total for route (F5: real aggregation)

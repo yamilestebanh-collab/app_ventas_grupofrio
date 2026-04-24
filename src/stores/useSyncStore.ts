@@ -106,6 +106,7 @@ interface SyncState {
   setOnline: (online: boolean) => void;
   setSyncing: (syncing: boolean) => void;
   clearDone: () => void;
+  clearDead: () => number;
 
   // Persistence
   persistQueue: () => Promise<void>;
@@ -296,6 +297,26 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const newQueue = get().queue.filter((i) => i.status !== 'done');
     set({ queue: newQueue, ...computeCounts(newQueue) });
     get().persistQueue();
+  },
+
+  // BLD-20260424-PURGE: limpieza explícita de items DEAD (operaciones que
+  // agotaron sus reintentos). Útil cuando hay residuos históricos que
+  // ensucian el badge rojo de SyncBar y ya nunca se van a sincronizar
+  // (por ejemplo: ventas viejas con shape obsoleto, GPS sin red de hace
+  // semanas, ACL errors ya resueltos pero con items huérfanos).
+  //
+  // Devuelve el número de items eliminados — útil para feedback al
+  // operador sin necesidad de consultar el queue de vuelta.
+  clearDead: () => {
+    const before = get().queue.length;
+    const newQueue = get().queue.filter((i) => i.status !== 'dead');
+    const removed = before - newQueue.length;
+    if (removed > 0) {
+      set({ queue: newQueue, ...computeCounts(newQueue) });
+      get().persistQueue();
+      logInfo('sync', 'dead_items_purged', { removed });
+    }
+    return removed;
   },
 
   // ═══ Persistence ═══

@@ -105,6 +105,9 @@ type EnrichedProduct = TruckProduct & {
 export function ProductPicker({ visible, onClose, existingProductIds, partnerId }: ProductPickerProps) {
   const products = useProductStore((s) => s.products);
   const inventorySource = useProductStore((s) => s.inventorySource);
+  // BLD-20260424-STOCKMETA: flag explícito del backend (Sebastián
+  // dd78489). Reemplaza la heurística client-side anterior.
+  const hasStockData = useProductStore((s) => s.hasStockData);
   const addSaleLine = useVisitStore((s) => s.addSaleLine);
   const forecasts = useKoldStore((s) => s.forecasts);
   const companyId = useAuthStore((s) => s.companyId);
@@ -186,27 +189,28 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
     });
   }, [products, recommendations, existingProductIds, priceMap]);
 
-  // BLD-20260424-BUGA: si TODO el catálogo viene en 0 stock, mostramos
-  // los productos igual (marcados como "Agotado") para que el vendedor
-  // al menos pueda ver qué existe y reportar el problema al supervisor.
-  // Antes, la lista quedaba completamente vacía cuando el backend
-  // respondía con el catálogo pero sin stock sincronizado en el almacén.
-  const allOutOfStock = useMemo(
-    () =>
-      enrichedProducts.length > 0 &&
-      enrichedProducts.every((p) => (p.qty_display ?? 0) <= 0),
-    [enrichedProducts],
-  );
+  // BLD-20260424-STOCKMETA: usamos el flag explícito hasStockData del
+  // backend (commit dd78489 de Sebastián) en vez de la heurística
+  // anterior "todos los qty están en 0". El backend lo calcula sobre el
+  // qty_map COMPLETO del warehouse, antes de filtrar/ordenar la lista
+  // que envía al cliente — así representa el stock real del almacén.
+  //
+  // Convención:
+  //   - hasStockData === true   → modo normal: ocultar productos agotados.
+  //   - hasStockData === false  → modo referencia: mostrar todos como "Agotado".
+  //   - hasStockData === null   → fuente NO es truck_stock (stock_quant
+  //                                o global_legacy): mostrar todos.
+  const showOutOfStockAsReference = hasStockData === false || hasStockData === null;
 
   // Filter + sort
   const filtered = useMemo(() => {
     return enrichedProducts.filter((p) => {
       if (activeCategory !== 'all' && p.category !== activeCategory) return false;
       if (!fuzzyMatch(p.name + ' ' + (p.default_code || ''), search)) return false;
-      // Ocultar agotados SOLO si hay catálogo normal con stock. Si todo
-      // está en 0 o ya es fallback global, dejamos pasar para no dejar
+      // Ocultar agotados solo en modo normal (truck_stock con stock real).
+      // En modo referencia o fallback global, dejamos pasar para no dejar
       // al vendedor con pantalla en blanco.
-      if (!isGlobalFallback && !allOutOfStock && p.qty_display <= 0) return false;
+      if (!isGlobalFallback && !showOutOfStockAsReference && p.qty_display <= 0) return false;
       return true;
     }).sort((a, b) => {
       if (a.isRecommended && !b.isRecommended) return -1;
@@ -215,7 +219,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
       if (a.qty_display <= 0 && b.qty_display > 0) return 1;
       return a.name.localeCompare(b.name);
     });
-  }, [enrichedProducts, activeCategory, search, isGlobalFallback, allOutOfStock]);
+  }, [enrichedProducts, activeCategory, search, isGlobalFallback, showOutOfStockAsReference]);
 
   // Category counts
   const categoryCounts = useMemo(() => {
