@@ -1,10 +1,9 @@
 /**
  * Server-side pricing endpoint availability tracker.
  *
- * The legacy `/api/get_all_products_with_customer_price` endpoint is not
- * deployed on every backend. Until the migration is done, the client
- * must tolerate 404s without hammering the endpoint forever and without
- * giving up until the next app restart.
+ * Tracks availability of the `/gf/logistics/api/employee/truck_stock` endpoint
+ * used for server-side price lookups. The client must tolerate failures without
+ * hammering the endpoint or giving up for the rest of the session.
  *
  * Policy: exponential backoff with cap.
  * - On first 404 / "not found", disable the endpoint for

@@ -86,7 +86,6 @@ function testPreferredPartnerPricelistIdPriority() {
   assert.equal(
     getPreferredPartnerPricelistId({
       pricelist_id: [93, 'IGUALA MEZCALA (MXN)'],
-      specific_property_product_pricelist: [12, 'Especial'],
       property_product_pricelist: [1, 'Predeterminado (MXN)'],
     }),
     93,
@@ -96,21 +95,19 @@ function testPreferredPartnerPricelistIdPriority() {
   assert.equal(
     getPreferredPartnerPricelistId({
       pricelist_id: false,
-      specific_property_product_pricelist: [12, 'Especial'],
       property_product_pricelist: [1, 'Predeterminado (MXN)'],
     }),
-    12,
-    'debe caer a specific_property_product_pricelist si no hay pricelist_id'
+    1,
+    'debe usar property_product_pricelist si no hay pricelist_id'
   );
 
   assert.equal(
     getPreferredPartnerPricelistId({
       pricelist_id: false,
-      specific_property_product_pricelist: false,
-      property_product_pricelist: [1, 'Predeterminado (MXN)'],
+      property_product_pricelist: false,
     }),
-    1,
-    'debe usar property_product_pricelist como ultimo recurso'
+    null,
+    'debe retornar null si ninguno está disponible'
   );
 }
 

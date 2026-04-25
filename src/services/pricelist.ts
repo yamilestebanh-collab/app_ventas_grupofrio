@@ -6,20 +6,18 @@
  *   Each partner has property_product_pricelist → their specific pricelist
  *   Pricelist items define: fixed price, percentage discount, or formula
  *
- * IMPORTANT: property_product_pricelist is a "property" field stored in
- * ir.property, NOT directly on res.partner. The custom /get_records endpoint
- * does NOT return property fields. We MUST use direct JSON-RPC (search_read
- * or read) to fetch it.
+ * Odoo 18: property_product_pricelist is a regular Many2one on res.partner
+ * (ir.property was removed). The /get_records endpoint does NOT return Many2one
+ * fields reliably — use odooRpc search_read or read to fetch them via native ORM.
  *
  * Strategy:
- *   1. Try odooRpc search_read on res.partner for property_product_pricelist
- *   2. If that fails, read ir.property directly as fallback
- *   3. Load pricelist items and compute prices manually
- *   4. As ultimate fallback, try product.pricelist get_products_price
+ *   1. Try odooRpc search_read on res.partner for pricelist_id / property_product_pricelist
+ *   2. If that fails, try /get_records as fallback
+ *   3. Load pricelist items and compute prices client-side
  */
 
 import { odooRead, odooRpc } from './odooRpc';
-import { postRpc } from './api';
+import { postRpc, postRest } from './api';
 import {
   shouldTryServerPricingEndpoint,
   disableServerPricingEndpointIfMissing,
@@ -84,7 +82,6 @@ interface PartnerPricelistRecord {
   parent_id?: [number, string] | number | false;
   commercial_partner_id?: [number, string] | number | false;
   pricelist_id?: [number, string] | number | false;
-  specific_property_product_pricelist?: [number, string] | number | false;
   property_product_pricelist?: [number, string] | number | false;
 }
 
@@ -92,7 +89,7 @@ interface PartnerPricelistResolution {
   candidatePartnerIds: number[];
   resolvedPartnerId: number | null;
   pricelistId: number | null;
-  source: 'partner_field' | 'ir.property' | 'get_records' | 'company_fallback' | 'none';
+  source: 'partner_field' | 'get_records' | 'company_fallback' | 'none';
 }
 
 interface PricingOptions {
@@ -186,7 +183,6 @@ async function readPartnersForPricelist(partnerIds: number[]): Promise<Map<numbe
       'parent_id',
       'commercial_partner_id',
       'pricelist_id',
-      'specific_property_product_pricelist',
       'property_product_pricelist',
     ],
     limit: uniqueIds.length,
@@ -237,63 +233,14 @@ async function resolvePartnerPricelist(partnerId: number, options?: PricingOptio
       }
     }
   } catch (err) {
-    console.warn('[pricelist] search_read failed, trying ir.property fallback:', err);
+    console.warn('[pricelist] search_read failed:', err);
   }
 
-  // ── Attempt 2: Read ir.property directly ──
-  // property_product_pricelist is stored in ir.property with
-  // res_id = 'res.partner,{partnerId}'
-  try {
-    const props = await odooRpc<any[]>('ir.property', 'search_read', [
-      [
-        ['name', '=', 'property_product_pricelist'],
-        ['res_id', 'in', candidatePartnerIds.map((id) => `res.partner,${id}`)],
-      ],
-    ], {
-      fields: ['res_id', 'value_reference'],
-      limit: candidatePartnerIds.length || 1,
-    });
-
-    console.log(`[pricelist] ir.property fallback for partner ${partnerId}:`, JSON.stringify(props));
-
-    const propByResId = new Map<string, any>();
-    for (const prop of props || []) {
-      if (typeof prop?.res_id === 'string') {
-        propByResId.set(prop.res_id, prop);
-      }
-    }
-
-    for (const candidateId of candidatePartnerIds) {
-      const prop = propByResId.get(`res.partner,${candidateId}`);
-      const ref = prop?.value_reference; // e.g. "product.pricelist,3"
-      if (typeof ref === 'string' && ref.startsWith('product.pricelist,')) {
-        const rawPricelistId = parseInt(ref.split(',')[1], 10);
-        const plId = !isNaN(rawPricelistId) && rawPricelistId > 0
-          ? await pickCompatiblePricelistId(candidateId, rawPricelistId, effectiveCompanyId)
-          : null;
-        if (plId) {
-          console.log(`[pricelist] Partner ${candidateId} pricelist from ir.property: ${plId}`);
-          const resolution: PartnerPricelistResolution = {
-            candidatePartnerIds,
-            resolvedPartnerId: candidateId,
-            pricelistId: plId,
-            source: 'ir.property',
-          };
-          cacheResolvedPartnerPricelistId(partnerId, plId, options);
-          partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
-          return resolution;
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[pricelist] ir.property fallback failed:', err);
-  }
-
-  // ── Attempt 3: /get_records as last resort ──
+  // ── Attempt 2: /get_records as last resort ──
   try {
     const partners = await odooRead<any>('res.partner', [
       ['id', '=', partnerId],
-    ], ['pricelist_id', 'specific_property_product_pricelist', 'property_product_pricelist'], 1);
+    ], ['pricelist_id', 'property_product_pricelist'], 1);
 
     console.log(`[pricelist] /get_records fallback for partner ${partnerId}:`, JSON.stringify(partners));
 
@@ -463,45 +410,40 @@ async function fetchServerSidePrices(
   }
 
   try {
-    const result = await postRpc<any>('/api/get_all_products_with_customer_price', {
-      customer_id: partnerId,
-    });
+    const result = await postRest<any>('gf/logistics/api/employee/truck_stock', {});
 
-    if (!result || result.status !== 'success' || !Array.isArray(result.data)) {
-      console.warn('[pricelist] Server-side endpoint returned unexpected format:', result?.status);
+    if (!result || typeof result !== 'object' || result.ok !== true) {
+      console.warn('[pricelist] truck_stock returned unexpected format');
       return null;
     }
 
-    // Endpoint is up. Reset any pending backoff so we fail fast if it
-    // disappears again.
     markServerPricingEndpointAvailable();
+
+    const stockProducts: Array<{ id: number; list_price?: number }> =
+      result.data?.products ?? [];
 
     const priceMap = new Map<number, number>();
     const productIds = new Set(products.map((p) => p.id));
     const productListPrices = new Map(products.map((p) => [p.id, p.list_price]));
 
-    for (const item of result.data) {
-      const productId = item.product_id;
-      if (!productId || !productIds.has(productId)) continue;
-
-      // Use customer_price from server (base price without tax)
-      const customerPrice = typeof item.customer_price === 'number' ? item.customer_price : null;
-      if (customerPrice === null || customerPrice <= 0) continue;
-
-      const listPrice = productListPrices.get(productId) ?? 0;
-      if (Math.abs(customerPrice - listPrice) > 0.01) {
-        priceMap.set(productId, customerPrice);
+    for (const item of stockProducts) {
+      if (!item.id || !productIds.has(item.id)) continue;
+      const stockPrice = typeof item.list_price === 'number' ? item.list_price : null;
+      if (stockPrice === null || stockPrice <= 0) continue;
+      const listPrice = productListPrices.get(item.id) ?? 0;
+      if (Math.abs(stockPrice - listPrice) > 0.01) {
+        priceMap.set(item.id, stockPrice);
       }
     }
 
-    console.log(`[pricelist] Server-side: ${priceMap.size} custom prices for partner ${partnerId}`);
+    console.log(`[pricelist] truck_stock: ${priceMap.size} price overrides for partner ${partnerId}`);
     return priceMap;
   } catch (err) {
     if (disableServerPricingEndpointIfMissing(err)) {
-      console.warn('[pricelist] Server-side pricing endpoint unavailable, backing off before retry.');
+      console.warn('[pricelist] truck_stock unavailable, backing off before retry.');
       return null;
     }
-    console.warn('[pricelist] Server-side endpoint unavailable, falling back to client-side:', err);
+    console.warn('[pricelist] truck_stock unavailable, falling back to client-side:', err);
     return null;
   }
 }

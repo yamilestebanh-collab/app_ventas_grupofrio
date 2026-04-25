@@ -3,7 +3,6 @@ export interface PartnerPricelistCandidateInput {
   parent_id?: [number, string] | number | false | null;
   commercial_partner_id?: [number, string] | number | false | null;
   pricelist_id?: [number, string] | number | false | null;
-  specific_property_product_pricelist?: [number, string] | number | false | null;
   property_product_pricelist?: [number, string] | number | false | null;
 }
 
@@ -53,14 +52,13 @@ export function buildPartnerPricelistCandidates(
 export function getPreferredPartnerPricelistId(
   partner: Pick<
     PartnerPricelistCandidateInput,
-    'pricelist_id' | 'specific_property_product_pricelist' | 'property_product_pricelist'
+    'pricelist_id' | 'property_product_pricelist'
   > | null | undefined
 ): number | null {
   if (!partner) return null;
 
   return (
     extractMany2oneId(partner.pricelist_id) ??
-    extractMany2oneId(partner.specific_property_product_pricelist) ??
     extractMany2oneId(partner.property_product_pricelist)
   );
 }
