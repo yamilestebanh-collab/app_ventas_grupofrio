@@ -31,7 +31,7 @@ export default function HomeScreen() {
   const warehouseId = useAuthStore((s) => s.warehouseId);
   const {
     plan, stops, stopsCompleted, stopsTotal, progressPct,
-    isLoading, loadPlan,
+    isLoading, loadPlan, error: planError, lastSync: planLastSync,
   } = useRouteStore();
   const isOnline = useSyncStore((s) => s.isOnline);
   const products = useProductStore((s) => s.products);
@@ -69,7 +69,7 @@ export default function HomeScreen() {
   const { refreshing, onRefresh } = useAsyncRefresh(refreshPlan);
 
   // Next stops (pending + in_progress, max 4)
-  const nextStops = useMemo(() => 
+  const nextStops = useMemo(() =>
     stops
       .filter((s) => ['pending', 'in_progress'].includes(s.state))
       .slice(0, 4)
@@ -78,6 +78,23 @@ export default function HomeScreen() {
   // Completed stops
   const doneStops = useMemo(() => stops.filter((s) => s.state === 'done'), [stops]);
   const todaySales = doneStops.length;
+
+  // BLD-20260425-NOPLAN: detectar el caso "no hay plan para hoy".
+  // Antes la home pintaba KPIs vacíos, mapa "Sin ruta asignada" y placeholders
+  // confusos cuando /my_plan respondía data.found:false. Ahora mostramos un
+  // EmptyState dedicado para que el operador entienda que NO está roto: solo
+  // no tiene ruta hoy. Disparamos solo después del primer intento de carga
+  // (planLastSync !== null) Y cuando no estamos cargando — así no parpadea
+  // durante el boot inicial.
+  const hasAttemptedLoad = planLastSync !== null || planError !== null;
+  const showNoPlanState =
+    !plan &&
+    !isLoading &&
+    hasAttemptedLoad;
+  // El backend custom puede mandar mensajes diferentes (data.found:false →
+  // "Sin plan para hoy"; otros casos → mensaje real). Mostramos siempre el
+  // mensaje del backend como subtítulo cuando exista, sin ocultarlo.
+  const isStandardNoPlan = !planError || /sin plan/i.test(planError);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -115,109 +132,158 @@ export default function HomeScreen() {
           />
         }
       >
-        {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}
-        <View style={styles.weatherCard}>
-          <Text style={{ fontSize: 22 }}>🌤️</Text>
-          <View style={{ flex: 1, marginLeft: 8 }}>
-            <Text style={styles.weatherCity}>Clima no disponible</Text>
-            <Text style={styles.weatherSub}>Proximamente en KOLD</Text>
-          </View>
-        </View>
-
-        {/* KPI Grid 2x2 */}
-        <View style={styles.kpiGrid}>
-          <KPICard
-            label="PARADAS"
-            value={`${stopsTotal}`}
-            subtitle={`${stopsCompleted} de ${stopsTotal}`}
-          />
-          <KPICard
-            label="CARGAR"
-            value="--"
-            subtitle="kg estimados"
-          />
-          <KPICard
-            label="VENTA HOY"
-            value="$0"
-            subtitle={`${todaySales} pedidos`}
-            valueColor={colors.success}
-          />
-          <KPICard
-            label="FORECAST"
-            value="--"
-            subtitle="F5: KoldDemand"
-          />
-        </View>
-
-        {/* Intelligence alerts */}
-        {koldAlerts.slice(0, 3).map((alert: KoldAlert, idx: number) => (
-          <AlertBanner
-            key={idx}
-            icon={alert.type === 'critical' ? '🔴' : alert.type === 'warning' ? '🟡' : '🟢'}
-            variant={alert.type === 'critical' ? 'critical' : alert.type === 'warning' ? 'warning' : 'info'}
-            message={alert.message}
-          />
-        ))}
-
-        {/* Route map preview */}
-        <Text style={styles.sectionTitle}>RUTA DEL DIA</Text>
-        <TouchableOpacity
-          style={styles.mapPreview}
-          onPress={() => router.push('/map' as never)}
-          activeOpacity={0.8}
-        >
-          <View style={styles.mapContent}>
-            <Text style={styles.mapRouteName}>
-              {plan?.route || plan?.name || 'Sin ruta asignada'}
+        {showNoPlanState ? (
+          /* BLD-20260425-NOPLAN: EmptyState dedicado cuando no hay plan
+             para hoy. Reemplaza KPIs/mapa/paradas para que el operador no
+             se confunda con un layout "vacío". Mantenemos SyncBar y
+             greeting (renderizados arriba) intactos. */
+          <View style={styles.noPlanCard}>
+            <Text style={styles.noPlanIcon}>📭</Text>
+            <Text style={styles.noPlanTitle}>
+              {isStandardNoPlan
+                ? 'Hoy no tienes ruta asignada'
+                : 'No se pudo cargar tu ruta'}
             </Text>
-            <Text style={styles.mapSub}>
-              {stopsTotal} paradas · Toca para mapa
+            <Text style={styles.noPlanBody}>
+              {isStandardNoPlan
+                ? 'Verifica con tu supervisor que el plan esté publicado, o si ya tienes plan, acepta tu carga desde la PWA de Jefe de Ruta antes de abrir Kold Field.'
+                : 'Hubo un problema al consultar tu plan con el servidor. Intenta refrescar o contacta soporte si persiste.'}
             </Text>
-          </View>
-        </TouchableOpacity>
-
-        {/* Progress bar */}
-        <View style={styles.progressContainer}>
-          <View style={styles.progressRow}>
-            <Text style={typography.bodySmall}>Progreso</Text>
-            <Text style={styles.progressValue}>{progressPct}%</Text>
-          </View>
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
-          </View>
-        </View>
-
-        {/* Next stops */}
-        <Text style={styles.sectionTitle}>PROXIMAS PARADAS</Text>
-        {isLoading ? (
-          <View style={styles.emptyCard}>
-            <Text style={typography.dim}>Cargando plan...</Text>
-          </View>
-        ) : nextStops.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Text style={typography.dim}>
-              {stopsTotal === 0
-                ? 'Sin plan asignado para hoy'
-                : 'Todas las paradas completadas 🎉'}
+            {planError && !isStandardNoPlan ? (
+              /* No ocultamos errores reales del backend: si /my_plan o
+                 /plan/stops devolvió un mensaje distinto a "Sin plan",
+                 lo mostramos textual para diagnóstico en campo. */
+              <Text style={styles.noPlanServerMsg}>
+                Mensaje del servidor: {planError}
+              </Text>
+            ) : null}
+            <TouchableOpacity
+              style={[styles.noPlanBtn, (!isOnline || isLoading) && styles.noPlanBtnDisabled]}
+              onPress={() => { void loadPlan(); }}
+              disabled={!isOnline || isLoading}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.noPlanBtnText}>
+                {isLoading ? 'Cargando...' : '🔄 Refrescar'}
+              </Text>
+            </TouchableOpacity>
+            {!isOnline ? (
+              <Text style={styles.noPlanHint}>
+                Sin conexión. Conéctate para refrescar.
+              </Text>
+            ) : null}
+            <Text style={styles.noPlanFootnote}>
+              Operadores con rol Jefe de Ruta: la PWA con tu carga del día se
+              abre desde el navegador del dispositivo.
             </Text>
           </View>
         ) : (
-          nextStops.map((stop, idx) => (
-            <StopCard key={stop.id} stop={stop} index={idx} />
-          ))
-        )}
-
-        {/* Done stops */}
-        {doneStops.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>COMPLETADAS ({doneStops.length})</Text>
-            {doneStops.slice(0, 2).map((stop, idx) => (
-              <StopCard key={stop.id} stop={stop} index={idx} />
+            {/* BLD-20260408-P2: Weather card — no API available yet, show honest placeholder */}
+            <View style={styles.weatherCard}>
+              <Text style={{ fontSize: 22 }}>🌤️</Text>
+              <View style={{ flex: 1, marginLeft: 8 }}>
+                <Text style={styles.weatherCity}>Clima no disponible</Text>
+                <Text style={styles.weatherSub}>Proximamente en KOLD</Text>
+              </View>
+            </View>
+
+            {/* KPI Grid 2x2 */}
+            <View style={styles.kpiGrid}>
+              <KPICard
+                label="PARADAS"
+                value={`${stopsTotal}`}
+                subtitle={`${stopsCompleted} de ${stopsTotal}`}
+              />
+              <KPICard
+                label="CARGAR"
+                value="--"
+                subtitle="kg estimados"
+              />
+              <KPICard
+                label="VENTA HOY"
+                value="$0"
+                subtitle={`${todaySales} pedidos`}
+                valueColor={colors.success}
+              />
+              <KPICard
+                label="FORECAST"
+                value="--"
+                subtitle="F5: KoldDemand"
+              />
+            </View>
+
+            {/* Intelligence alerts */}
+            {koldAlerts.slice(0, 3).map((alert: KoldAlert, idx: number) => (
+              <AlertBanner
+                key={idx}
+                icon={alert.type === 'critical' ? '🔴' : alert.type === 'warning' ? '🟡' : '🟢'}
+                variant={alert.type === 'critical' ? 'critical' : alert.type === 'warning' ? 'warning' : 'info'}
+                message={alert.message}
+              />
             ))}
-            {doneStops.length > 2 && (
-              <Text style={[typography.dim, { textAlign: 'center', marginBottom: 10 }]}>
-                +{doneStops.length - 2} paradas mas
-              </Text>
+
+            {/* Route map preview */}
+            <Text style={styles.sectionTitle}>RUTA DEL DIA</Text>
+            <TouchableOpacity
+              style={styles.mapPreview}
+              onPress={() => router.push('/map' as never)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.mapContent}>
+                <Text style={styles.mapRouteName}>
+                  {plan?.route || plan?.name || 'Sin ruta asignada'}
+                </Text>
+                <Text style={styles.mapSub}>
+                  {stopsTotal} paradas · Toca para mapa
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Progress bar */}
+            <View style={styles.progressContainer}>
+              <View style={styles.progressRow}>
+                <Text style={typography.bodySmall}>Progreso</Text>
+                <Text style={styles.progressValue}>{progressPct}%</Text>
+              </View>
+              <View style={styles.progressBar}>
+                <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+              </View>
+            </View>
+
+            {/* Next stops */}
+            <Text style={styles.sectionTitle}>PROXIMAS PARADAS</Text>
+            {isLoading ? (
+              <View style={styles.emptyCard}>
+                <Text style={typography.dim}>Cargando plan...</Text>
+              </View>
+            ) : nextStops.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Text style={typography.dim}>
+                  {stopsTotal === 0
+                    ? 'Sin paradas en tu plan'
+                    : 'Todas las paradas completadas 🎉'}
+                </Text>
+              </View>
+            ) : (
+              nextStops.map((stop, idx) => (
+                <StopCard key={stop.id} stop={stop} index={idx} />
+              ))
+            )}
+
+            {/* Done stops */}
+            {doneStops.length > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>COMPLETADAS ({doneStops.length})</Text>
+                {doneStops.slice(0, 2).map((stop, idx) => (
+                  <StopCard key={stop.id} stop={stop} index={idx} />
+                ))}
+                {doneStops.length > 2 && (
+                  <Text style={[typography.dim, { textAlign: 'center', marginBottom: 10 }]}>
+                    +{doneStops.length - 2} paradas mas
+                  </Text>
+                )}
+              </>
             )}
           </>
         )}
@@ -374,5 +440,68 @@ const styles = StyleSheet.create({
     borderRadius: radii.card,
     padding: 20,
     alignItems: 'center',
+  },
+  // BLD-20260425-NOPLAN: EmptyState dedicado cuando no hay plan asignado.
+  noPlanCard: {
+    backgroundColor: colors.card,
+    borderRadius: radii.card,
+    padding: 24,
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  noPlanIcon: {
+    fontSize: 56,
+    marginBottom: 12,
+  },
+  noPlanTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  noPlanBody: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textDim,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  noPlanServerMsg: {
+    fontSize: 11,
+    color: colors.textDim,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginBottom: 14,
+    paddingHorizontal: 8,
+  },
+  noPlanBtn: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: radii.button,
+    minWidth: 180,
+    alignItems: 'center',
+  },
+  noPlanBtnDisabled: {
+    opacity: 0.4,
+  },
+  noPlanBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  noPlanHint: {
+    fontSize: 11,
+    color: colors.textDim,
+    marginTop: 8,
+  },
+  noPlanFootnote: {
+    fontSize: 10,
+    color: colors.textDim,
+    textAlign: 'center',
+    marginTop: 18,
+    paddingHorizontal: 12,
+    lineHeight: 14,
   },
 });
