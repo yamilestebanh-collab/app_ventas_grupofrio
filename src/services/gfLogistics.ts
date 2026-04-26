@@ -19,7 +19,7 @@ import { CheckoutResultStatus } from './checkoutResult';
 // BLD-008: optional client event metadata. Feature-flagged inside the
 // helper — safe to pass from anywhere.
 import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientEvent';
-import { logInfo } from '../utils/logger';
+import { logInfo, logWarn } from '../utils/logger';
 
 const GF_BASE = 'gf/logistics/api/employee';
 
@@ -69,7 +69,20 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
       if (Array.isArray(result)) return result as any[];
       if (!result || typeof result !== 'object') return [];
       if (result.ok === false) {
-        console.warn('[gfLogistics] plan/stops returned ok=false:', result.message);
+        // BLD-20260425-NOPLAN: NO ocultamos el error real del backend.
+        // Antes era console.warn (no llega al export del operador). Ahora
+        // logWarn estructurado con plan_id + message para que se vea en
+        // los logs persistidos y en el debug-export del dispositivo. Esto
+        // es lo que cubre los reportes "ruta abre pero stops vacíos" sin
+        // explicación: queda evidencia clara de que /plan/stops devolvió
+        // ok:false (típicamente "No tienes acceso a este plan" cuando el
+        // plan ya cambió de estado o se reasignó).
+        logWarn('general', 'plan_stops_access_denied', {
+          endpoint: 'gf/logistics/api/employee/plan/stops',
+          plan_id: planId,
+          message: typeof result.message === 'string' ? result.message : null,
+          note: 'No se cargaron stops por respuesta ok:false del backend.',
+        });
         return [];
       }
       const data = result.data !== undefined ? result.data : result;
@@ -101,7 +114,14 @@ export async function getPlanStops(planId: number): Promise<GFStop[]> {
 
     return rawStops as GFStop[];
   } catch (error) {
-    console.warn('[gfLogistics] plan/stops failed:', error);
+    // BLD-20260425-NOPLAN: log estructurado del fallo de red/servidor
+    // para que aparezca en el export del operador. Mantenemos el return []
+    // para no romper el caller, pero la causa queda registrada.
+    logWarn('general', 'plan_stops_request_failed', {
+      endpoint: 'gf/logistics/api/employee/plan/stops',
+      plan_id: planId,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return [];
   }
 }
