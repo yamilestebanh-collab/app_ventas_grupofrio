@@ -110,7 +110,11 @@ export function primeCustomerPriceCacheForTests(
   cacheCustomerPrices(partnerId, products, new Map(prices), options);
 }
 
-export function resetPricelistCachesForTests(): void {
+export function clearPricelistCaches(): void {
   partnerPriceCache.clear();
   partnerPricelistIdCache.clear();
+}
+
+export function resetPricelistCachesForTests(): void {
+  clearPricelistCaches();
 }

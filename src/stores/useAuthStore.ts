@@ -13,6 +13,7 @@ import { signOut } from '../services/gfLogistics';
 import { clearOdooSession } from '../services/odooSession';
 import { extractEmployeeAnalyticPlaza, fetchEmployeeAnalyticPlaza } from '../services/employeeAnalytics';
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
+import { clearPricelistCaches } from '../services/pricelist';
 import { useRouteStore } from './useRouteStore';
 
 interface AuthState {
@@ -317,6 +318,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       await setAuthTokens(result.api_key, result.gf_employee_token || '');
       await clearRouteCache();
+      clearPricelistCaches();
 
       const emp: EmployeePayload = result.employee || {};
 
@@ -327,20 +329,22 @@ export const useAuthStore = create<AuthState>((set) => ({
       const parentRaw = pick(emp, 'parentId', 'parent_id');
       const paymentJournalRaw = pick(emp, 'defaultPaymentJournalId', 'default_payment_journal_id');
       const cashAccountRaw = pick(emp, 'defaultCashAccountId', 'default_cash_account_id');
-      const analyticPlaza = extractEmployeeAnalyticPlaza(emp);
+      // Try to extract plaza from login response (fast path)
+      const analyticPlazaFromLogin = extractEmployeeAnalyticPlaza(emp);
+      const employeeId = (pick<number>(emp, 'employeeId', 'id') as number) ?? null;
 
       set({
         isAuthenticated: true,
         isLoading: false,
         error: null,
-        employeeId: (pick<number>(emp, 'employeeId', 'id') as number) ?? null,
+        employeeId,
         employeeName: (pick<string>(emp, 'employeeName', 'name') as string) ?? '',
         companyId: extractId(companyRaw),
         companyName: (pick<string>(emp, 'companyName') as string) ?? extractName(companyRaw),
         warehouseId: extractId(warehouseRaw),
         warehouseName: (pick<string>(emp, 'warehouseName') as string) ?? extractName(warehouseRaw),
-        employeeAnalyticPlazaId: analyticPlaza.id,
-        employeeAnalyticPlazaName: analyticPlaza.name,
+        employeeAnalyticPlazaId: analyticPlazaFromLogin.id,
+        employeeAnalyticPlazaName: analyticPlazaFromLogin.name,
         parentId: extractId(parentRaw),
         isSupervisor: !!pick(emp, 'isSupervisor', 'is_supervisor'),
         allowCreateCustomer: !!pick(emp, 'allowCreateCustomer', 'allow_create_customer'),
@@ -358,6 +362,19 @@ export const useAuthStore = create<AuthState>((set) => ({
         defaultCashAccountId: extractId(cashAccountRaw),
         customerIds: (pick<number[]>(emp, 'customerIds', 'customer_ids') as number[]) ?? [],
       });
+
+      // Fetch plaza analytic from hr.employee if login response didn't include it.
+      // Runs synchronously before returning so the sale screen always has plaza set.
+      if (!analyticPlazaFromLogin.id && employeeId) {
+        try {
+          const plaza = await fetchEmployeeAnalyticPlaza(employeeId);
+          if (plaza.id) {
+            set({ employeeAnalyticPlazaId: plaza.id, employeeAnalyticPlazaName: plaza.name });
+          }
+        } catch {
+          console.warn('[auth] Could not fetch employee analytic plaza on login');
+        }
+      }
 
       // BLD-20260408-P0: Persist auth state so it survives app restart.
       const state = useAuthStore.getState();

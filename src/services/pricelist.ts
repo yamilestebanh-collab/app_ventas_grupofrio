@@ -33,6 +33,7 @@ import {
   isPricelistCompatibleWithCompany,
   peekResolvedPartnerPricelistId,
   peekCachedCustomerPrices,
+  clearPricelistCaches as clearPartnerPricelistCaches,
 } from './pricelistCache';
 
 export {
@@ -43,6 +44,14 @@ export {
   isPricelistCompatibleWithCompany,
   peekResolvedPartnerPricelistId,
 } from './pricelistCache';
+
+/** Limpia todos los cachés de listas de precio (llamar tras re-login). */
+export function clearPricelistCaches(): void {
+  partnerPricelistResolutionCache.clear();
+  pricelistItemsCache.clear();
+  pricelistCompanyCache.clear();
+  clearPartnerPricelistCaches();
+}
 
 export interface PricelistItem {
   id: number;
@@ -170,20 +179,32 @@ async function readPartnersForPricelist(partnerIds: number[]): Promise<Map<numbe
   const uniqueIds = [...new Set(partnerIds.filter((id) => typeof id === 'number' && id > 0))];
   if (uniqueIds.length === 0) return new Map();
 
-  const partners = await odooRpc<PartnerPricelistRecord[]>('res.partner', 'search_read', [
-    [['id', 'in', uniqueIds]],
-  ], {
-    fields: [
-      'id',
-      'parent_id',
-      'commercial_partner_id',
-      'pricelist_id',
-      'property_product_pricelist',
-    ],
-    limit: uniqueIds.length,
-  });
+  const FIELDS = ['id', 'parent_id', 'commercial_partner_id', 'pricelist_id', 'property_product_pricelist'];
 
-  return new Map((partners || []).map((partner) => [partner.id, partner]));
+  // Strategy 1: Odoo web session (call_kw / execute_kw)
+  try {
+    const partners = await odooRpc<PartnerPricelistRecord[]>('res.partner', 'search_read', [
+      [['id', 'in', uniqueIds]],
+    ], { fields: FIELDS, limit: uniqueIds.length });
+    if (partners && partners.length > 0) {
+      return new Map(partners.map((p) => [p.id, p]));
+    }
+  } catch { /* session not available */ }
+
+  // Strategy 2: /get_records via API key (no session needed)
+  try {
+    const partners = await odooRead<PartnerPricelistRecord>(
+      'res.partner',
+      [['id', 'in', uniqueIds]],
+      FIELDS,
+      uniqueIds.length,
+    );
+    if (partners && partners.length > 0) {
+      return new Map(partners.map((p) => [p.id, p]));
+    }
+  } catch { /* /get_records also unavailable for res.partner */ }
+
+  return new Map();
 }
 
 async function resolvePartnerPricelist(partnerId: number, options?: PricingOptions): Promise<PartnerPricelistResolution> {

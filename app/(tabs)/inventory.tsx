@@ -52,9 +52,6 @@ export default function InventoryScreen() {
     ? Math.min(100, Math.round((forecastKg / totalStockKg) * 100))
     : 0;
 
-  // Low stock warnings
-  const lowStockProducts = products.filter((p) => p.qty_available > 0 && p.qty_available <= 5);
-
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TopBar title="📦 Camioneta" />
@@ -105,16 +102,6 @@ export default function InventoryScreen() {
           )}
         </Card>
 
-        {/* Low stock warnings */}
-        {lowStockProducts.map((p) => (
-          <AlertBanner
-            key={p.id}
-            icon="⚠️"
-            variant="warning"
-            message={`${p.name}: solo quedan ${p.qty_available} unidades`}
-          />
-        ))}
-
         {/* Product list */}
         <Text style={styles.sectionTitle}>DETALLE DE CARGA</Text>
         {isLoading ? (
@@ -143,6 +130,7 @@ export default function InventoryScreen() {
                   </Text>
                   <Text style={styles.productQty}>
                     {p.qty_display} disp. · {p._totalKg.toFixed(0)}kg
+                    {(p as any).qty_reserved > 0 ? ` · ${(p as any).qty_reserved} res.` : ''}
                   </Text>
                 </View>
               </View>

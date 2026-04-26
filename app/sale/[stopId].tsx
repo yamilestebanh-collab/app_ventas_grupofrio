@@ -38,6 +38,7 @@ export default function SaleScreen() {
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
   const removeStop = useRouteStore((s) => s.removeStop);
+  const updateStopState = useRouteStore((s) => s.updateStopState);
   const stop = stops.find((s) => s.id === Number(stopId));
   const companyId = useAuthStore((s) => s.companyId);
   const warehouseId = useAuthStore((s) => s.warehouseId);
@@ -201,9 +202,9 @@ export default function SaleScreen() {
           timestamp: Date.now(),
         }, { dependsOn: [saleSyncId] });
       }
-      removeStop(stop.id);
+      updateStopState(stop.id, 'done');
       resetVisit();
-      router.replace('/(tabs)' as never);
+      router.replace('/(tabs)/route' as never);
       return;
     }
 
@@ -284,7 +285,7 @@ export default function SaleScreen() {
           visible={pickerVisible}
           onClose={() => setPickerVisible(false)}
           existingProductIds={saleLines.map((l) => l.productId)}
-          partnerId={stop.customer_id}
+          partnerId={salePartnerId}
         />
 
         {/* Totals card */}

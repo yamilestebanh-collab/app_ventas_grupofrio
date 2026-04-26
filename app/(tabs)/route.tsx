@@ -75,14 +75,22 @@ export default function RouteScreen() {
         </View>
 
         {/* BLD-20260408-P0: Off-route sale button */}
-        <Button
-          label="🔍 Visita especial"
-          variant="secondary"
-          small
-          fullWidth
-          onPress={() => router.push('/offroute' as never)}
-          style={{ marginBottom: 10 }}
-        />
+        <View style={styles.offrouteRow}>
+          <Button
+            label="🔍 Visita especial"
+            variant="secondary"
+            small
+            onPress={() => router.push('/offroute' as never)}
+            style={{ flex: 1 }}
+          />
+          <Button
+            label="📋 Nuevo Lead"
+            variant="secondary"
+            small
+            onPress={() => router.push('/newcustomer' as never)}
+            style={{ flex: 1 }}
+          />
+        </View>
 
         {planTypeLabel && (
           <View style={styles.routeTypeRow}>
@@ -155,6 +163,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.screenPadding, paddingBottom: 100 },
   actionRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
+  offrouteRow: { flexDirection: 'row', gap: 6, marginBottom: 10 },
   routeTypeRow: { marginBottom: 10 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
   statItem: { alignItems: 'center' },
