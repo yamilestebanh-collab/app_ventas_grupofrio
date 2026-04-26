@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SyncBar } from '../../src/components/ui/SyncBar';
 import { KPICard } from '../../src/components/ui/KPICard';
@@ -21,6 +21,8 @@ import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { preloadRouteCustomerPrices } from '../../src/services/pricelist';
+import { useSalesStore } from '../../src/stores/useSalesStore';
+import { formatCurrency } from '../../src/utils/time';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -34,6 +36,8 @@ export default function HomeScreen() {
     isLoading, loadPlan, error: planError, lastSync: planLastSync,
   } = useRouteStore();
   const isOnline = useSyncStore((s) => s.isOnline);
+  const salesSummary = useSalesStore((s) => s.summary);
+  const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const products = useProductStore((s) => s.products);
   const isLoadingProducts = useProductStore((s) => s.isLoading);
   const loadProducts = useProductStore((s) => s.loadProducts);
@@ -44,6 +48,13 @@ export default function HomeScreen() {
       void loadPlan();
     }
   }, [employeeId, isAuthenticated, isOnline, loadPlan]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAuthenticated || !isOnline) return;
+      void loadTodaySales();
+    }, [isAuthenticated, isOnline, loadTodaySales]),
+  );
 
   useEffect(() => {
     if (!isAuthenticated || !isOnline || !warehouseId || products.length > 0 || isLoadingProducts) {
@@ -64,8 +75,11 @@ export default function HomeScreen() {
   const getAlerts = useKoldStore((s) => s.getAlerts);
   const koldAlerts = useMemo(() => getAlerts() || [], [getAlerts]);
   const refreshPlan = useCallback(async () => {
-    await loadPlan();
-  }, [loadPlan]);
+    await Promise.all([
+      loadPlan(),
+      loadTodaySales(),
+    ]);
+  }, [loadPlan, loadTodaySales]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshPlan);
 
   // Next stops (pending + in_progress, max 4)
@@ -77,7 +91,7 @@ export default function HomeScreen() {
 
   // Completed stops
   const doneStops = useMemo(() => stops.filter((s) => s.state === 'done'), [stops]);
-  const todaySales = doneStops.length;
+  const todaySales = salesSummary.orders_count;
 
   // BLD-20260425-NOPLAN: detectar el caso "no hay plan para hoy".
   // Antes la home pintaba KPIs vacíos, mapa "Sin ruta asignada" y placeholders
@@ -202,7 +216,7 @@ export default function HomeScreen() {
               />
               <KPICard
                 label="VENTA HOY"
-                value="$0"
+                value={formatCurrency(salesSummary.sales_amount_total)}
                 subtitle={`${todaySales} pedidos`}
                 valueColor={colors.success}
               />

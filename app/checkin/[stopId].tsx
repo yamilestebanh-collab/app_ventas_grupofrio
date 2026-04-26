@@ -4,7 +4,7 @@
  * Shows GPS status, distance, and clear feedback.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -30,7 +30,7 @@ import { getLeadActionVisibility } from '../../src/services/leadVisit';
 const GEOFENCE_RADIUS_M = 50;
 
 export default function CheckinScreen() {
-  const { stopId } = useLocalSearchParams<{ stopId: string }>();
+  const { stopId, exchangeMessage } = useLocalSearchParams<{ stopId: string; exchangeMessage?: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
   const updateStopState = useRouteStore((s) => s.updateStopState);
@@ -55,7 +55,18 @@ export default function CheckinScreen() {
 
   const [gpsLoading, setGpsLoading] = useState(true);
   const [checkingIn, setCheckingIn] = useState(false); // Prevent double-tap
+  const [flashMessage, setFlashMessage] = useState<string | null>(null);
+  const handledExchangeMessageRef = useRef<string | null>(null);
   const isOffrouteVisit = !!stop?._isOffroute;
+
+  useEffect(() => {
+    if (typeof exchangeMessage !== 'string' || exchangeMessage.trim().length === 0) return;
+    if (handledExchangeMessageRef.current === exchangeMessage) return;
+    handledExchangeMessageRef.current = exchangeMessage;
+    setFlashMessage(exchangeMessage);
+    const timeout = setTimeout(() => setFlashMessage(null), 2500);
+    return () => clearTimeout(timeout);
+  }, [exchangeMessage]);
 
   // Timer tick
   useEffect(() => {
@@ -421,6 +432,12 @@ export default function CheckinScreen() {
 
         <Text style={styles.customerName}>{stop.customer_name}</Text>
 
+        {flashMessage ? (
+          <View style={styles.flashBar}>
+            <Text style={styles.flashText}>{flashMessage}</Text>
+          </View>
+        ) : null}
+
         {/* Action grid 2x3 */}
         <View style={styles.actionGrid}>
           {actionVisibility.showSale ? (
@@ -462,6 +479,16 @@ export default function CheckinScreen() {
             >
               <Text style={styles.actionIcon}>💰</Text>
               <Text style={styles.actionLabel}>Cobrar</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {showCollect ? (
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => router.push(`/exchange/${stop.id}` as never)}
+            >
+              <Text style={styles.actionIcon}>🔁</Text>
+              <Text style={styles.actionLabel}>Registrar Cambio</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -556,6 +583,21 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginBottom: 10,
   },
   geoBarText: { fontSize: 11, fontWeight: '600', color: colors.success },
+  flashBar: {
+    backgroundColor: colors.successAlpha08,
+    borderColor: colors.successAlpha12,
+    borderWidth: 1,
+    borderRadius: radii.button,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  flashText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.success,
+  },
   // Action grid
   actionGrid: {
     flexDirection: 'row', flexWrap: 'wrap',

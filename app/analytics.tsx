@@ -3,9 +3,10 @@
  * V1: Structure with derived data from local stores.
  */
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from 'expo-router';
 import { TopBar } from '../src/components/ui/TopBar';
 import { KPICard } from '../src/components/ui/KPICard';
 import { Card } from '../src/components/ui/Card';
@@ -13,10 +14,20 @@ import { colors, spacing, radii } from '../src/theme/tokens';
 import { typography } from '../src/theme/typography';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
+import { useSalesStore } from '../src/stores/useSalesStore';
+import { formatCurrency } from '../src/utils/time';
 
 export default function AnalyticsScreen() {
   const { stopsCompleted, stopsTotal, progressPct } = useRouteStore();
   const pendingOps = useSyncStore((s) => s.pendingCount);
+  const summary = useSalesStore((s) => s.summary);
+  const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadTodaySales();
+    }, [loadTodaySales]),
+  );
 
   const visitPct = stopsTotal > 0 ? Math.round((stopsCompleted / stopsTotal) * 100) : 0;
 
@@ -29,9 +40,9 @@ export default function AnalyticsScreen() {
         <View style={styles.kpiGrid}>
           <KPICard label="VISITAS" value={`${stopsCompleted}/${stopsTotal}`}
                    subtitle={`${visitPct}% completado`} />
-          <KPICard label="VENTAS" value="$0" subtitle="0 pedidos"
+          <KPICard label="VENTAS" value={formatCurrency(summary.sales_amount_total)} subtitle={`${summary.orders_count} pedidos`}
                    valueColor={colors.success} />
-          <KPICard label="COBRADO" value="$0" subtitle="0 facturas" />
+          <KPICard label="COBRADO" value={formatCurrency(summary.cash_amount_total + summary.credit_amount_total)} subtitle="corte del dia" />
           <KPICard label="SYNC" value={`${pendingOps}`} subtitle="pendientes"
                    valueColor={pendingOps > 0 ? colors.warning : colors.success} />
         </View>
@@ -44,11 +55,11 @@ export default function AnalyticsScreen() {
           </View>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>Ticket promedio</Text>
-            <Text style={styles.metricValue}>--</Text>
+            <Text style={styles.metricValue}>{formatCurrency(summary.avg_ticket)}</Text>
           </View>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>kg promedio/visita</Text>
-            <Text style={styles.metricValue}>--</Text>
+            <Text style={styles.metricValue}>{summary.orders_count > 0 ? `${(summary.kg_total / summary.orders_count).toFixed(1)} kg` : '--'}</Text>
           </View>
           <View style={styles.metricRow}>
             <Text style={styles.metricLabel}>Tiempo promedio/visita</Text>

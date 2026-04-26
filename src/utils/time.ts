@@ -34,28 +34,22 @@ export function formatKg(kg: number): string {
   return `${kg.toFixed(1)} kg`;
 }
 
-// ═══════════════════════════════════════════
-// PRECIO VISIBLE CON IVA
-// ═══════════════════════════════════════════
-
-/**
- * IVA rate used throughout the app.
- * Odoo `list_price` is the base price WITHOUT IVA.
- * The driver sees the final price WITH IVA (list_price * 1.16).
- *
- * IMPORTANT: This is ONLY for display. The internal sale calculations
- * in useVisitStore continue using base price for subtotal/tax/total
- * and the sync payload sends price_unit = base price to Odoo.
- */
+// IVA is no longer added client-side in the sales flow. Prices shown to
+// the operator should match the active pricelist as-is.
 export const IVA_RATE = 0.16;
 
-/** Calculate price with IVA included for display purposes */
+/** Legacy helper retained for compatibility with existing imports. */
 export function priceWithIVA(basePrice: number): number {
   const safe = typeof basePrice === 'number' && !isNaN(basePrice) ? basePrice : 0;
-  return safe * (1 + IVA_RATE);
+  return safe;
 }
 
-/** Format price with IVA as currency string */
+export function formatCatalogPrice(price: number): string {
+  const safe = typeof price === 'number' && !isNaN(price) ? price : 0;
+  return formatCurrency(safe);
+}
+
+/** Legacy helper retained for compatibility with existing imports. */
 export function formatPriceWithIVA(basePrice: number): string {
-  return formatCurrency(priceWithIVA(basePrice));
+  return formatCatalogPrice(basePrice);
 }

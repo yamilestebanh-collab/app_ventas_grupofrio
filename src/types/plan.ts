@@ -22,6 +22,11 @@ export interface GFPlan {
   driver_employee_name?: string;
   warehouse_id?: number;
   warehouse_name?: string;
+  // stock.location ID of the van's active location (gf.route.location_en_ruta_id).
+  // Populated by backend when found=true. Required by the gift/transfer endpoints.
+  // NOT the same as warehouse_id (which is stock.warehouse).
+  mobile_location_id?: number | null;
+  mobile_location_name?: string | null;
 }
 
 export type StopState =
@@ -37,6 +42,7 @@ export interface GFStop {
   id: OdooId;
   customer_id: number;
   customer_name: string;
+  visit_line_id?: number | null;
   partner_id?: [number, string] | number | false | null;
   customer_ref?: string;
   customer_latitude?: number;

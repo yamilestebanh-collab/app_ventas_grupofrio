@@ -15,7 +15,7 @@ import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
 import { useProductStore } from '../../src/stores/useProductStore';
 import { useAuthStore } from '../../src/stores/useAuthStore';
-import { formatPriceWithIVA } from '../../src/utils/time';
+import { formatCatalogPrice } from '../../src/utils/time';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
 
@@ -126,7 +126,7 @@ export default function InventoryScreen() {
                 </Text>
                 <View style={styles.productRight}>
                   <Text style={styles.productPrice}>
-                    {formatPriceWithIVA(p.list_price)}
+                    {formatCatalogPrice(p.list_price)}
                   </Text>
                   <Text style={styles.productQty}>
                     {p.qty_display} disp. · {p._totalKg.toFixed(0)}kg

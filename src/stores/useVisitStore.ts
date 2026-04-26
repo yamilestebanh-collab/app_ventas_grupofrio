@@ -221,8 +221,8 @@ export const useVisitStore = create<VisitState>((set, get) => ({
 
   // Computed
   saleSubtotal: () => get().saleLines.reduce((sum, l) => sum + l.price * l.qty, 0),
-  saleTax: () => get().saleSubtotal() * 0.16,
-  saleTotal: () => get().saleSubtotal() * 1.16,
+  saleTax: () => 0,
+  saleTotal: () => get().saleSubtotal(),
   saleTotalKg: () => get().saleLines.reduce((sum, l) => sum + l.weight * l.qty, 0),
 
   // V1.2: Stock validation — checks if any line exceeds available stock

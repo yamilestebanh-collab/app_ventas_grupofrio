@@ -6,12 +6,12 @@
 import React, { useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { TopBar } from '../src/components/ui/TopBar';
 import { useRouteStore } from '../src/stores/useRouteStore';
 import { useLocationStore } from '../src/stores/useLocationStore';
 import { colors, spacing, radii } from '../src/theme/tokens';
-import { typography } from '../src/theme/typography';
 import type { GFStop, StopState } from '../src/types/plan';
 
 const STATUS_COLORS: Record<StopState, string> = {
@@ -35,6 +35,7 @@ const STATUS_LABELS: Record<StopState, string> = {
 };
 
 export default function MapScreen() {
+  const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
   const lat = useLocationStore((s) => s.latitude);
   const lon = useLocationStore((s) => s.longitude);
@@ -93,6 +94,22 @@ export default function MapScreen() {
     });
   }, []);
 
+  const openSale = useCallback((stop: GFStop) => {
+    router.push(`/sale/${stop.id}` as never);
+  }, [router]);
+
+  const promptStopAction = useCallback((stop: GFStop) => {
+    Alert.alert(
+      stop.customer_name,
+      '¿Qué quieres hacer con este cliente?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Abrir Maps', onPress: () => openNavigation(stop) },
+        { text: 'Hacer venta', onPress: () => openSale(stop) },
+      ],
+    );
+  }, [openNavigation, openSale]);
+
   const visited = stops.filter((s) => s.state === 'done').length;
   const pending = stops.filter((s) => s.state === 'pending').length;
   const noCoords = stops.length - stopsWithCoords.length;
@@ -150,7 +167,8 @@ export default function MapScreen() {
               title={`#${stop.route_sequence || '?'} ${stop.customer_name}`}
               description={STATUS_LABELS[stop.state] || stop.state}
               pinColor={STATUS_COLORS[stop.state] || '#8B95A3'}
-              onCalloutPress={() => openNavigation(stop)}
+              onPress={() => promptStopAction(stop)}
+              onCalloutPress={() => promptStopAction(stop)}
             />
           ))}
         </MapView>
@@ -158,7 +176,7 @@ export default function MapScreen() {
 
       {/* Legend */}
       <View style={styles.legend}>
-        {(['confirmed', 'in_progress', 'done', 'skipped'] as StopState[]).map((key) => (
+        {(['pending', 'in_progress', 'done', 'not_visited'] as StopState[]).map((key) => (
           <View key={key} style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: STATUS_COLORS[key] }]} />
             <Text style={styles.legendText}>{STATUS_LABELS[key]}</Text>
@@ -173,11 +191,18 @@ export default function MapScreen() {
           .sort((a, b) => (a.route_sequence || 0) - (b.route_sequence || 0))[0];
         if (!next) return null;
         return (
-          <TouchableOpacity style={styles.navButton} onPress={() => openNavigation(next)} activeOpacity={0.8}>
-            <Text style={styles.navButtonText}>
-              📍 Ir a #{next.route_sequence} {next.customer_name}
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.actionsWrap}>
+            <TouchableOpacity style={styles.saleButton} onPress={() => openSale(next)} activeOpacity={0.8}>
+              <Text style={styles.saleButtonText}>
+                🧾 Venta a #{next.route_sequence} {next.customer_name}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.mapsButton} onPress={() => openNavigation(next)} activeOpacity={0.8}>
+              <Text style={styles.mapsButtonText}>
+                📍 Ir a #{next.route_sequence} {next.customer_name}
+              </Text>
+            </TouchableOpacity>
+          </View>
         );
       })()}
     </SafeAreaView>
@@ -206,10 +231,19 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 8, marginVertical: 2 },
   legendDot: { width: 8, height: 8, borderRadius: 4, marginRight: 4 },
   legendText: { fontSize: 10, color: colors.textDim },
-  navButton: {
+  actionsWrap: {
+    gap: 8,
+    marginBottom: 16,
+    marginHorizontal: spacing.screenPadding,
+  },
+  saleButton: {
     backgroundColor: colors.primary,
-    marginHorizontal: spacing.screenPadding, marginBottom: 16,
     paddingVertical: 14, borderRadius: radii.button, alignItems: 'center',
   },
-  navButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+  mapsButton: {
+    backgroundColor: colors.cardLighter,
+    paddingVertical: 14, borderRadius: radii.button, alignItems: 'center',
+  },
+  saleButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+  mapsButtonText: { color: colors.text, fontSize: 15, fontWeight: '700' },
 });

@@ -5,13 +5,13 @@
  * - Images: URL-based (/web/image/) instead of base64 (image_128 not returned by API)
  * - Toggle: Uses text labels instead of unicode symbols, key prop forces FlatList remount
  * - Prices: Supports customer-specific pricelist (not just public list_price)
- * - IVA: Applied to display price (base * 1.16)
+ * - Prices: Displayed exactly as they come from the active pricelist
  *
  * PRICE LOGIC:
  *   1. Check customer pricelist (priceMap from pricelist.ts)
  *   2. If no custom price → use list_price (public)
- *   3. Apply IVA 16% for display
- *   4. SaleLineItem.price = base WITHOUT IVA (for Odoo sync)
+ *   3. Display the same price shown in the pricelist
+ *   4. SaleLineItem.price = that same price for Odoo sync
  */
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
@@ -27,10 +27,11 @@ import { useKoldStore } from '../../stores/useKoldStore';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { getBaseUrl } from '../../services/api';
 import { computeCustomerPrices, peekCachedCustomerPrices } from '../../services/pricelist';
+import { getVisiblePricelistPrice, normalizeSaleLineBasePrice } from '../../services/salePricing';
 import { Badge } from '../ui/Badge';
 import { colors, spacing, radii } from '../../theme/tokens';
 import { typography, fonts } from '../../theme/typography';
-import { IVA_RATE, formatCurrency } from '../../utils/time';
+import { formatCurrency } from '../../utils/time';
 
 // ═══ Types ═══
 
@@ -83,13 +84,9 @@ function fuzzyMatch(text: string, query: string): boolean {
   return words.every((w) => t.includes(w));
 }
 
-/** Format price for display.
- *  - Customer pricelist prices are already NET (IVA included) → show as-is.
- *  - Public list_price is base (sin IVA) → apply ×1.16.
- *  The `isNet` flag distinguishes between the two. */
-function displayPrice(price: number, isNet = false): string {
-  const safe = typeof price === 'number' && !isNaN(price) ? price : 0;
-  return formatCurrency(isNet ? safe : safe * (1 + IVA_RATE));
+/** Format visible pricelist price exactly as backend returned it. */
+function displayPrice(basePrice: number): string {
+  return formatCurrency(getVisiblePricelistPrice(basePrice));
 }
 
 type EnrichedProduct = TruckProduct & {
@@ -97,7 +94,7 @@ type EnrichedProduct = TruckProduct & {
   isRecommended: boolean;
   isAlreadyAdded: boolean;
   customerPrice: number; // price for this customer (may differ from list_price)
-  hasCustomPrice: boolean; // true when price comes from customer pricelist (already NET w/IVA)
+  hasCustomPrice: boolean; // true when price comes from customer pricelist
 };
 
 // ═══ Component ═══
@@ -244,15 +241,13 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
 
     const qty = quantities[product.id] || 1;
     // SaleLineItem.price = base price SIN IVA (for Odoo sync).
-    // Customer pricelist prices are NET (con IVA) → divide by 1.16 to get base.
-    // Public list_price is already base (sin IVA) → use as-is.
+    // Both public and customer pricelist prices are already base values.
     const rawPrice = (typeof product.customerPrice === 'number' && !isNaN(product.customerPrice))
       ? product.customerPrice : 0;
-    const safePrice = product.hasCustomPrice ? rawPrice / (1 + IVA_RATE) : rawPrice;
     const line: SaleLineItem = {
       productId: product.id,
       productName: product.name,
-      price: Math.round(safePrice * 100) / 100,
+      price: normalizeSaleLineBasePrice(rawPrice),
       qty: Math.min(qty, product.qty_display),
       stock: product.qty_display,
       weight: product.weight || 5,
@@ -322,7 +317,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
           </View>
           <View style={styles.listMeta}>
             <Text style={[styles.listPrice, disabled && styles.textDim]}>
-              {displayPrice(p.customerPrice, p.hasCustomPrice)}
+              {displayPrice(p.customerPrice)}
             </Text>
             {p.hasCustomPrice && <Text style={styles.customPriceTag}>cliente</Text>}
             <Text style={styles.sep}>·</Text>
@@ -387,7 +382,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
 
           <View style={styles.gridPriceRow}>
             <Text style={[styles.gridPrice, disabled && styles.textDim]}>
-              {displayPrice(p.customerPrice, p.hasCustomPrice)}
+              {displayPrice(p.customerPrice)}
             </Text>
             {p.hasCustomPrice && <Text style={styles.customPriceTagSm}>cliente</Text>}
           </View>
@@ -495,7 +490,7 @@ export function ProductPicker({ visible, onClose, existingProductIds, partnerId 
             {priceLoading ? ' · Cargando precios...' : ''}
           </Text>
           <Text style={styles.infoText}>
-            {hasCustomPrices ? 'Precio cliente c/IVA' : 'Precio c/IVA'}
+            {hasCustomPrices ? 'Precio lista cliente' : 'Precio lista'}
           </Text>
         </View>
 

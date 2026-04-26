@@ -208,7 +208,14 @@ export default function StopDetailScreen() {
               label="⭐ Lealtad"
               variant="secondary"
               onPress={() => Alert.alert('Lealtad', 'F8: Programa de lealtad')}
-              fullWidth
+              style={{ flex: 1 }}
+            />
+            <Button
+              label="🎁 Regalo"
+              variant="secondary"
+              onPress={() => router.push(`/gift/${stop.id}` as never)}
+              style={{ flex: 1 }}
+              disabled={!visitGuard.canAccessVisitActions}
             />
           </View>
         </View>

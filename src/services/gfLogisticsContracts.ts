@@ -51,6 +51,17 @@ function normalizeSaleLine(line: Record<string, unknown>): Record<string, unknow
   return normalized;
 }
 
+function normalizeExchangeLine(line: Record<string, unknown>): Record<string, unknown> | null {
+  const productId = asPositiveNumber(line.product_id);
+  const qty = asPositiveNumber(line.qty) ?? asPositiveNumber(line.quantity);
+  if (!productId || !qty) return null;
+
+  return {
+    product_id: productId,
+    qty,
+  };
+}
+
 export function buildSalesCreatePayload(payload: Record<string, unknown>): Record<string, unknown> {
   const operationId = pickOperationId(payload);
   const partnerId = asPositiveNumber(payload.partner_id);
@@ -133,4 +144,47 @@ export function buildPaymentsCreatePayload(payload: Record<string, unknown>): Re
   }
 
   return contractPayload;
+}
+
+export function buildExchangeCreatePayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const analyticAccountId = asPositiveNumber(payload.analytic_account_id);
+  const idempotencyKey =
+    asNonEmptyString(payload.idempotency_key) ??
+    pickOperationId(payload);
+  const mobileLocationId = asPositiveNumber(payload.mobile_location_id);
+  const partnerId = asPositiveNumber(payload.partner_id);
+  const visitLineId = asPositiveNumber(payload.visit_line_id);
+  const notes = asNonEmptyString(payload.notes);
+  const validate = payload.validate === false ? false : true;
+  const deliveryLines = Array.isArray(payload.delivery_lines)
+    ? payload.delivery_lines
+        .map((line) => (line && typeof line === 'object'
+          ? normalizeExchangeLine(line as Record<string, unknown>)
+          : null))
+        .filter((line): line is Record<string, unknown> => line !== null)
+    : [];
+  const mermaLines = Array.isArray(payload.merma_lines)
+    ? payload.merma_lines
+        .map((line) => (line && typeof line === 'object'
+          ? normalizeExchangeLine(line as Record<string, unknown>)
+          : null))
+        .filter((line): line is Record<string, unknown> => line !== null)
+    : [];
+
+  const meta: Record<string, unknown> = {
+    idempotency_key: idempotencyKey,
+  };
+  if (analyticAccountId) meta.analytic_account_id = analyticAccountId;
+
+  const data: Record<string, unknown> = {
+    mobile_location_id: mobileLocationId,
+    partner_id: partnerId,
+    delivery_lines: deliveryLines,
+    merma_lines: mermaLines,
+    validate,
+  };
+  if (visitLineId) data.visit_line_id = visitLineId;
+  if (notes) data.notes = notes;
+
+  return { meta, data };
 }

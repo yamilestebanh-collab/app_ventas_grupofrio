@@ -287,9 +287,14 @@ async function resolvePartnerPricelist(partnerId: number, options?: PricingOptio
       pricelistId: fallbackPricelistId,
       source: 'company_fallback',
     };
-    cacheResolvedPartnerPricelistId(partnerId, fallbackPricelistId, options);
+    // Cache null so peekResolvedPartnerPricelistId returns null — callers that
+    // build the sale.order payload must NOT send the company fallback pricelist
+    // because it may belong to a different company than the partner, causing
+    // "Empresas incompatibles" errors in Odoo. The internal resolution cache
+    // still holds the fallback so computeCustomerPrices can display prices.
+    cacheResolvedPartnerPricelistId(partnerId, null, options);
     console.log(
-      `[pricelist] Using company fallback pricelist ${fallbackPricelistId} for partner ${partnerId}`,
+      `[pricelist] Using company fallback pricelist ${fallbackPricelistId} for partner ${partnerId} (not sent to backend)`,
     );
     partnerPricelistResolutionCache.set(resolutionCacheKey, resolution);
     return resolution;

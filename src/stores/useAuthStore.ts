@@ -15,6 +15,7 @@ import { extractEmployeeAnalyticPlaza, fetchEmployeeAnalyticPlaza } from '../ser
 import { storeSave, storeLoad, storeRemove, STORAGE_KEYS } from '../persistence/storage';
 import { clearPricelistCaches } from '../services/pricelist';
 import { useRouteStore } from './useRouteStore';
+import { useSalesStore } from './useSalesStore';
 
 interface AuthState {
   // Auth status
@@ -29,6 +30,8 @@ interface AuthState {
   companyName: string;
   warehouseId: number | null;
   warehouseName: string;
+  mobileLocationId: number | null;
+  mobileLocationName: string;
   employeeAnalyticPlazaId: number | null;
   employeeAnalyticPlazaName: string;
   parentId: number | null; // supervisor
@@ -116,6 +119,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   companyName: '',
   warehouseId: null,
   warehouseName: '',
+  mobileLocationId: null,
+  mobileLocationName: '',
   employeeAnalyticPlazaId: null,
   employeeAnalyticPlazaName: '',
   parentId: null,
@@ -160,6 +165,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: nextState.companyName,
         warehouseId: nextState.warehouseId,
         warehouseName: nextState.warehouseName,
+        mobileLocationId: nextState.mobileLocationId,
+        mobileLocationName: nextState.mobileLocationName,
         employeeAnalyticPlazaId: nextState.employeeAnalyticPlazaId,
         employeeAnalyticPlazaName: nextState.employeeAnalyticPlazaName,
         parentId: nextState.parentId,
@@ -211,6 +218,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: typeof saved.companyName === 'string' ? saved.companyName : '',
         warehouseId,
         warehouseName: typeof saved.warehouseName === 'string' ? saved.warehouseName : '',
+        mobileLocationId: typeof saved.mobileLocationId === 'number' ? saved.mobileLocationId : null,
+        mobileLocationName: typeof saved.mobileLocationName === 'string' ? saved.mobileLocationName : '',
         employeeAnalyticPlazaId: typeof saved.employeeAnalyticPlazaId === 'number' ? saved.employeeAnalyticPlazaId : null,
         employeeAnalyticPlazaName: typeof saved.employeeAnalyticPlazaName === 'string' ? saved.employeeAnalyticPlazaName : '',
         parentId: typeof saved.parentId === 'number' ? saved.parentId : null,
@@ -319,6 +328,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       await setAuthTokens(result.api_key, result.gf_employee_token || '');
       await clearRouteCache();
       clearPricelistCaches();
+      useSalesStore.getState().reset();
 
       const emp: EmployeePayload = result.employee || {};
 
@@ -326,6 +336,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Many-to-one fields (warehouse_id, company_id, etc.) arrive as [id, name] tuples.
       const warehouseRaw = pick(emp, 'warehouseId', 'warehouse_id');
       const companyRaw = pick(emp, 'companyId', 'company_id');
+      const mobileLocationRaw = pick(emp, 'mobileLocationId', 'mobile_location_id', 'mobile_location');
       const parentRaw = pick(emp, 'parentId', 'parent_id');
       const paymentJournalRaw = pick(emp, 'defaultPaymentJournalId', 'default_payment_journal_id');
       const cashAccountRaw = pick(emp, 'defaultCashAccountId', 'default_cash_account_id');
@@ -343,6 +354,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: (pick<string>(emp, 'companyName') as string) ?? extractName(companyRaw),
         warehouseId: extractId(warehouseRaw),
         warehouseName: (pick<string>(emp, 'warehouseName') as string) ?? extractName(warehouseRaw),
+        mobileLocationId: extractId(mobileLocationRaw),
+        mobileLocationName: (pick<string>(emp, 'mobileLocationName') as string) ?? extractName(mobileLocationRaw),
         employeeAnalyticPlazaId: analyticPlazaFromLogin.id,
         employeeAnalyticPlazaName: analyticPlazaFromLogin.name,
         parentId: extractId(parentRaw),
@@ -385,6 +398,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: state.companyName,
         warehouseId: state.warehouseId,
         warehouseName: state.warehouseName,
+        mobileLocationId: state.mobileLocationId,
+        mobileLocationName: state.mobileLocationName,
         employeeAnalyticPlazaId: state.employeeAnalyticPlazaId,
         employeeAnalyticPlazaName: state.employeeAnalyticPlazaName,
         parentId: state.parentId,
@@ -417,6 +432,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     } finally {
       clearOdooSession();
       await clearRouteCache();
+      useSalesStore.getState().reset();
       await clearAuthTokens();
       await storeRemove(STORAGE_KEYS.AUTH_STATE);
       set({
@@ -427,6 +443,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         companyName: '',
         warehouseId: null,
         warehouseName: '',
+        mobileLocationId: null,
+        mobileLocationName: '',
         employeeAnalyticPlazaId: null,
         employeeAnalyticPlazaName: '',
         customerIds: [],

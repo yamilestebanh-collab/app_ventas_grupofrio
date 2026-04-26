@@ -8,7 +8,7 @@
  * 3. Virtual stop is created in route store
  * 4. Customers route to sale; leads route to prospection
  *
- * Uses authenticated Odoo RPC to search res.partner + crm.lead.
+ * Uses Odoo search with authenticated fallback to /get_records.
  */
 
 import React, { useState, useCallback } from 'react';
@@ -45,6 +45,8 @@ export default function OffRouteScreen() {
   const patchStop = useRouteStore((s) => s.patchStop);
   const isOnline = useSyncStore((s) => s.isOnline);
   const companyId = useAuthStore((s) => s.companyId);
+  const employeeAnalyticPlazaId = useAuthStore((s) => s.employeeAnalyticPlazaId);
+  const employeeAnalyticPlazaName = useAuthStore((s) => s.employeeAnalyticPlazaName);
   const latitude = useLocationStore((s) => s.latitude);
   const longitude = useLocationStore((s) => s.longitude);
 
@@ -58,7 +60,9 @@ export default function OffRouteScreen() {
     setIsSearching(true);
     setHasSearched(true);
     try {
-      const searchResults = await searchOffrouteEntities(q);
+      const searchResults = await searchOffrouteEntities(q, {
+        analyticPlazaId: employeeAnalyticPlazaId,
+      });
       setResults(searchResults);
     } catch (error) {
       console.warn('[offroute] Search failed:', error);
@@ -66,7 +70,7 @@ export default function OffRouteScreen() {
     } finally {
       setIsSearching(false);
     }
-  }, [search]);
+  }, [employeeAnalyticPlazaId, search]);
   const refreshSearch = useCallback(async () => {
     const q = search.trim();
     if (!hasSearched || q.length < 3) return;
@@ -215,6 +219,11 @@ export default function OffRouteScreen() {
         <Text style={styles.infoText}>
           Busca clientes o leads fuera de tu ruta. Cliente abre venta; lead abre prospección.
         </Text>
+        {employeeAnalyticPlazaName ? (
+          <Text style={styles.scopeText}>
+            Filtro activo: {employeeAnalyticPlazaName}
+          </Text>
+        ) : null}
 
         {/* Results */}
         {isSearching ? (
@@ -276,6 +285,12 @@ const styles = StyleSheet.create({
   infoText: {
     fontSize: 11, color: colors.textDim, marginBottom: 12,
     lineHeight: 16,
+  },
+  scopeText: {
+    fontSize: 11,
+    color: colors.primary,
+    marginBottom: 10,
+    fontWeight: '600',
   },
   list: { paddingBottom: 80 },
   customerCard: {

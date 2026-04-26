@@ -102,11 +102,15 @@ export const useRouteStore = create<RouteState>((set, get) => ({
 
       // Enrich stops with score + forecast
       const koldStore = useKoldStore.getState();
-      const stops = rawStops.map((s) => ({
-        ...s,
-        _koldScore: koldStore.getScore(s.customer_id) || undefined,
-        _koldForecast: koldStore.getForecast(s.customer_id) || undefined,
-      }));
+      const stops = rawStops.map((s) => {
+        const score = koldStore.getScore(s.customer_id);
+        const forecast = koldStore.getForecast(s.customer_id);
+        return {
+          ...s,
+          _koldScore: score ?? s._koldScore ?? undefined,
+          _koldForecast: forecast ?? s._koldForecast ?? undefined,
+        };
+      });
 
       const completed = stops.filter((s) =>
         ['done', 'not_visited', 'no_stock', 'rejected', 'closed'].includes(s.state)

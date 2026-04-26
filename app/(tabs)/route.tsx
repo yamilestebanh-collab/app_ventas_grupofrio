@@ -6,7 +6,7 @@
 import React, { useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { Badge } from '../../src/components/ui/Badge';
@@ -17,6 +17,8 @@ import { useRouteStore } from '../../src/stores/useRouteStore';
 import { GFStop } from '../../src/types/plan';
 import { useAsyncRefresh } from '../../src/hooks/useAsyncRefresh';
 import { getPlanTypeLabel, getStopTypeLabel } from '../../src/services/routePresentation';
+import { useSalesStore } from '../../src/stores/useSalesStore';
+import { formatCurrency } from '../../src/utils/time';
 
 function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' | 'cyan' | 'blue' | 'dim' | 'orange' } | null {
   const score = stop._koldScore;
@@ -36,10 +38,21 @@ function getStopBadge(stop: GFStop): { label: string; variant: 'green' | 'red' |
 export default function RouteScreen() {
   const router = useRouter();
   const { plan, stops, stopsCompleted, stopsTotal, loadPlan } = useRouteStore();
+  const salesSummary = useSalesStore((s) => s.summary);
+  const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
   const refreshPlan = useCallback(async () => {
-    await loadPlan();
-  }, [loadPlan]);
+    await Promise.all([
+      loadPlan(),
+      loadTodaySales(),
+    ]);
+  }, [loadPlan, loadTodaySales]);
   const { refreshing, onRefresh } = useAsyncRefresh(refreshPlan);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadTodaySales();
+    }, [loadTodaySales]),
+  );
 
   const sorted = [...stops].sort((a, b) => {
     const da = ['done', 'not_visited', 'closed'].includes(a.state) ? 0 : 1;
@@ -102,7 +115,7 @@ export default function RouteScreen() {
         <View style={styles.statsRow}>
           {[
             { label: 'Progreso', value: `${stopsCompleted}/${stopsTotal}` },
-            { label: 'Vendido', value: '$0', color: colors.success },
+            { label: 'Vendido', value: formatCurrency(salesSummary.sales_amount_total), color: colors.success },
             { label: 'Cargado', value: '--kg' },
             { label: 'Restante', value: '--kg', color: colors.primary },
           ].map((s) => (

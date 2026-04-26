@@ -3,25 +3,35 @@
  * Daily sales summary, KPIs, order list.
  */
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/ui/TopBar';
 import { Button } from '../../src/components/ui/Button';
 import { KPICard } from '../../src/components/ui/KPICard';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography, fonts } from '../../src/theme/typography';
+import { useSalesStore } from '../../src/stores/useSalesStore';
+import { formatCurrency } from '../../src/utils/time';
 
 export default function SalesScreen() {
   const router = useRouter();
+  const loadTodaySales = useSalesStore((s) => s.loadTodaySales);
+  const summary = useSalesStore((s) => s.summary);
+  const orders = useSalesStore((s) => s.orders);
 
-  // F8: These will come from aggregating sync queue + Odoo data
-  const todaySales = 0;
-  const todayKg = 0;
-  const todayOrders = 0;
-  const monthlyTarget = 0;
-  const monthlyAchieved = 0;
+  useFocusEffect(
+    useCallback(() => {
+      void loadTodaySales();
+    }, [loadTodaySales]),
+  );
+
+  const todaySales = summary.sales_amount_total;
+  const todayKg = summary.kg_total;
+  const todayOrders = summary.orders_count;
+  const monthlyTarget = summary.monthly_target;
+  const monthlyAchieved = summary.monthly_achieved;
   const progressPct = monthlyTarget > 0
     ? Math.round((monthlyAchieved / monthlyTarget) * 100) : 0;
 
@@ -46,7 +56,7 @@ export default function SalesScreen() {
 
         {/* KPIs */}
         <View style={styles.kpiGrid}>
-          <KPICard label="VENDIDO" value={`$${todaySales.toLocaleString()}`}
+          <KPICard label="VENDIDO" value={formatCurrency(todaySales)}
                    valueColor={colors.success} />
           <KPICard label="META" value={monthlyTarget > 0 ? `$${(monthlyTarget/1000).toFixed(1)}k` : '--'}
                    subtitle={`${progressPct}%`} />
@@ -69,7 +79,21 @@ export default function SalesScreen() {
               Las ventas aparecen aqui al confirmar pedidos
             </Text>
           </View>
-        ) : null}
+        ) : (
+          <View style={styles.list}>
+            {orders.map((order) => (
+              <View key={order.id} style={styles.orderCard}>
+                <View style={styles.orderRow}>
+                  <Text style={styles.orderName}>{order.name}</Text>
+                  <Text style={styles.orderAmount}>{formatCurrency(order.amount_total)}</Text>
+                </View>
+                <Text style={styles.orderMeta}>
+                  {order.partner_name} · {order.kg_total.toFixed(0)} kg
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -94,5 +118,34 @@ const styles = StyleSheet.create({
   },
   emptyCard: {
     backgroundColor: colors.card, borderRadius: radii.card, padding: 20, alignItems: 'center',
+  },
+  list: { gap: 8 },
+  orderCard: {
+    backgroundColor: colors.card,
+    borderRadius: radii.card,
+    padding: 14,
+  },
+  orderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    alignItems: 'center',
+  },
+  orderName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+    fontFamily: fonts.bodyBold,
+  },
+  orderAmount: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.success,
+    fontFamily: fonts.monoBold,
+  },
+  orderMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: colors.textDim,
   },
 });

@@ -9,7 +9,13 @@ export function unwrapRestResult(parsed: unknown, status: number): unknown {
     const message = typeof result.message === 'string' && result.message.trim().length > 0
       ? result.message
       : `HTTP ${status}`;
-    throw new Error(message);
+    const err = new Error(message);
+    // Attach the backend error code so callers can branch on it without
+    // parsing the human-readable message string.
+    if (typeof result.code === 'string' && result.code.length > 0) {
+      (err as Error & { code: string }).code = result.code;
+    }
+    throw err;
   }
 
   return payload;

@@ -51,7 +51,7 @@ export default function CheckoutScreen() {
   if (!stop) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Check-out" showBack />
+        <TopBar title="Check-out" showBack onBack={() => router.replace('/(tabs)' as never)} />
         <View style={styles.center}>
           <Text style={typography.dim}>Parada no encontrada</Text>
         </View>
@@ -164,7 +164,7 @@ export default function CheckoutScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <TopBar title="Check-out" showBack />
+      <TopBar title="Check-out" showBack onBack={() => router.replace('/(tabs)' as never)} />
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Success header */}

@@ -1,7 +1,7 @@
 export const DEFAULT_SALES_COMPANY_ID = 34;
 
 export const COMPANY_PRICELIST_FALLBACKS: Record<number, number> = {
-  34: 81,
+  34: 104,
 };
 
 export function getEffectiveSalesCompanyId(companyId: number | null | undefined): number {

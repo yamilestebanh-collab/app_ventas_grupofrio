@@ -12,17 +12,19 @@ import { typography } from '../../theme/typography';
 interface TopBarProps {
   title: string;
   showBack?: boolean;
+  onBack?: () => void;
   rightAction?: { label: string; onPress: () => void };
   rightIcon?: { name: keyof typeof Ionicons.glyphMap; onPress: () => void };
 }
 
-export function TopBar({ title, showBack = false, rightAction, rightIcon }: TopBarProps) {
+export function TopBar({ title, showBack = false, onBack, rightAction, rightIcon }: TopBarProps) {
   const router = useRouter();
+  const handleBack = onBack ?? (() => router.back());
 
   return (
     <View style={styles.container}>
       {showBack ? (
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
           <Ionicons name="chevron-back" size={18} color={colors.text} />
         </TouchableOpacity>
       ) : (

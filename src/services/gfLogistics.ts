@@ -20,8 +20,149 @@ import { CheckoutResultStatus } from './checkoutResult';
 // helper — safe to pass from anywhere.
 import { ClientEventMeta, attachClientMetaToRestPayload } from '../utils/clientEvent';
 import { logInfo, logWarn } from '../utils/logger';
+import { buildExchangeCreatePayload } from './gfLogisticsContracts';
 
 const GF_BASE = 'gf/logistics/api/employee';
+
+export interface GFSalesSummary {
+  date: string;
+  orders_count: number;
+  sales_amount_total: number;
+  amount_untaxed_total: number;
+  amount_tax_total: number;
+  kg_total: number;
+  avg_ticket: number;
+  monthly_target: number;
+  monthly_achieved: number;
+  cash_amount_total: number;
+  credit_amount_total: number;
+}
+
+export interface GFSalesOrder {
+  id: number;
+  name: string;
+  partner_id: number | null;
+  partner_name: string;
+  amount_total: number;
+  amount_untaxed: number;
+  amount_tax: number;
+  kg_total: number;
+  state: string;
+  date_order: string;
+  confirmation_date: string;
+  stop_id: number | null;
+  operation_id: string;
+}
+
+export interface GFSalesListResult {
+  count: number;
+  orders: GFSalesOrder[];
+}
+
+export interface GFExchangeResult {
+  exchange_id: number | null;
+  exchange_name: string;
+  picking_delivery_id: number | null;
+  picking_merma_id: number | null;
+  state: string;
+}
+
+export interface GFExchangeResponse {
+  user_message: string;
+  data: GFExchangeResult;
+}
+
+const EMPTY_SALES_SUMMARY: GFSalesSummary = {
+  date: '',
+  orders_count: 0,
+  sales_amount_total: 0,
+  amount_untaxed_total: 0,
+  amount_tax_total: 0,
+  kg_total: 0,
+  avg_ticket: 0,
+  monthly_target: 0,
+  monthly_achieved: 0,
+  cash_amount_total: 0,
+  credit_amount_total: 0,
+};
+
+function toNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function toNullablePositiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function unwrapEnvelope<T>(result: unknown): T | null {
+  if (!result || typeof result !== 'object') return null;
+  const payload = result as Record<string, unknown>;
+  return (payload.data !== undefined ? payload.data : payload) as T;
+}
+
+function normalizeSalesSummary(result: unknown): GFSalesSummary {
+  const data = unwrapEnvelope<Record<string, unknown>>(result) ?? {};
+  return {
+    date: typeof data.date === 'string' ? data.date : '',
+    orders_count: toNumber(data.orders_count),
+    sales_amount_total: toNumber(data.sales_amount_total),
+    amount_untaxed_total: toNumber(data.amount_untaxed_total),
+    amount_tax_total: toNumber(data.amount_tax_total),
+    kg_total: toNumber(data.kg_total),
+    avg_ticket: toNumber(data.avg_ticket),
+    monthly_target: toNumber(data.monthly_target),
+    monthly_achieved: toNumber(data.monthly_achieved),
+    cash_amount_total: toNumber(data.cash_amount_total),
+    credit_amount_total: toNumber(data.credit_amount_total),
+  };
+}
+
+function normalizeSalesList(result: unknown): GFSalesListResult {
+  const data = unwrapEnvelope<Record<string, unknown>>(result) ?? {};
+  const ordersRaw = Array.isArray(data.orders) ? data.orders : [];
+
+  return {
+    count: toNumber(data.count),
+    orders: ordersRaw.map((row) => {
+      const order = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+      return {
+        id: toNumber(order.id),
+        name: typeof order.name === 'string' ? order.name : '',
+        partner_id: toNullablePositiveNumber(order.partner_id),
+        partner_name: typeof order.partner_name === 'string' ? order.partner_name : '',
+        amount_total: toNumber(order.amount_total),
+        amount_untaxed: toNumber(order.amount_untaxed),
+        amount_tax: toNumber(order.amount_tax),
+        kg_total: toNumber(order.kg_total),
+        state: typeof order.state === 'string' ? order.state : '',
+        date_order: typeof order.date_order === 'string' ? order.date_order : '',
+        confirmation_date: typeof order.confirmation_date === 'string' ? order.confirmation_date : '',
+        stop_id: toNullablePositiveNumber(order.stop_id),
+        operation_id: typeof order.operation_id === 'string' ? order.operation_id : '',
+      };
+    }),
+  };
+}
+
+function normalizeExchangeResponse(result: unknown): GFExchangeResponse {
+  const payload = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+  const data = payload.data && typeof payload.data === 'object'
+    ? payload.data as Record<string, unknown>
+    : {};
+
+  return {
+    user_message: typeof payload.user_message === 'string' && payload.user_message.trim().length > 0
+      ? payload.user_message
+      : 'Cambio procesado',
+    data: {
+      exchange_id: toNullablePositiveNumber(data.exchange_id),
+      exchange_name: typeof data.exchange_name === 'string' ? data.exchange_name : '',
+      picking_delivery_id: toNullablePositiveNumber(data.picking_delivery_id),
+      picking_merma_id: toNullablePositiveNumber(data.picking_merma_id),
+      state: typeof data.state === 'string' ? data.state : '',
+    },
+  };
+}
 
 // ═══ Plan & Route ═══
 
@@ -237,6 +378,50 @@ export async function createPayment(
   return !!result;
 }
 
+export async function createExchange(
+  payload: Record<string, unknown>,
+  meta?: ClientEventMeta | null,
+): Promise<GFExchangeResponse> {
+  const contractPayload = buildExchangeCreatePayload(payload);
+  const body = attachClientMetaToRestPayload(contractPayload, meta ?? null);
+  // NOTE: este endpoint vive en gf/salesops, NOT en gf/logistics/api/employee.
+  const result = await postRest<any>(
+    'gf/salesops/exchange/create',
+    body,
+  );
+  return normalizeExchangeResponse(result);
+}
+
+export async function fetchSalesSummary(
+  payload: { date?: string } = {},
+): Promise<GFSalesSummary> {
+  const body: Record<string, unknown> = {};
+  if (typeof payload.date === 'string' && payload.date.trim().length > 0) {
+    body.date = payload.date.trim();
+  }
+
+  const result = await postRest<any>(`${GF_BASE}/sales/summary`, body);
+  return normalizeSalesSummary(result) ?? EMPTY_SALES_SUMMARY;
+}
+
+export async function fetchSalesList(
+  payload: { date?: string; limit?: number; offset?: number } = {},
+): Promise<GFSalesListResult> {
+  const body: Record<string, unknown> = {};
+  if (typeof payload.date === 'string' && payload.date.trim().length > 0) {
+    body.date = payload.date.trim();
+  }
+  if (typeof payload.limit === 'number' && payload.limit > 0) {
+    body.limit = payload.limit;
+  }
+  if (typeof payload.offset === 'number' && payload.offset >= 0) {
+    body.offset = payload.offset;
+  }
+
+  const result = await postRest<any>(`${GF_BASE}/sales/list`, body);
+  return normalizeSalesList(result);
+}
+
 export async function fetchAnalyticsOptions(
   payload: { partner_id?: number | null; partner_ids?: number[] } = {},
 ): Promise<Record<string, unknown> | null> {
@@ -310,6 +495,174 @@ export async function closeOffrouteVisit(
   const data = result.data !== undefined ? result.data : result;
   const visit = data?.visit ?? data;
   return visit && typeof visit === 'object' ? visit : null;
+}
+
+// ═══ Gifts / Muestras (gf_salesops) ═══
+//
+// POST /gf/salesops/gift/create  (type="json" — acepta plain JSON o JSON-RPC)
+//
+// CONTRATO VERIFICADO contra gf_saleops/controllers/main.py + services/response.py:
+//
+//   Payload: { meta: { analytic_account_id, idempotency_key }, data: { ... } }
+//   - meta.analytic_account_id: el pipeline LO SOBREESCRIBE con el valor derivado
+//     del token del empleado (guard, línea 407). Enviarlo es redundante pero
+//     inofensivo; sirve como sanity-check del lado cliente.
+//   - meta.idempotency_key: usado para deduplicación (use_idempotency=True).
+//   - data.mobile_location_id: stock.location.id (NOT warehouse_id). REQUERIDO.
+//     Validado contra cfg.mobile_location_ids (allowlist de la sucursal).
+//   - data.partner_id: REQUERIDO.
+//   - data.lines: [{ product_id, qty }]. REQUERIDO, mínimo 1 línea con qty > 0.
+//   - data.visit_line_id: opcional (salesperson.visit.line.id legacy).
+//   - data.notes: opcional.
+//   - data.validate: true → confirma el picking en Odoo.
+//
+// FORMATO DE RESPUESTA (services/response.py):
+//   Éxito:  { status: "ok",    code: "OK",     user_message, data, meta }
+//   Error:  { status: "error", code: <string>, user_message, data, meta }
+//   Lock:   { status: "busy",  code: "LOCKED", user_message, data: { retry_after }, meta }
+//
+// IMPORTANTE — Por qué NO usamos unwrapRestResult para detectar errores:
+//   unwrapRestResult solo lanza cuando result.ok === false.
+//   Este módulo (gf_saleops) usa result.status, NO result.ok.
+//   Si se usara postRest sin inspección, una respuesta de error pasaría
+//   silenciosamente como "éxito" con gift_id=0. Se verifica result.status
+//   explícitamente en el path de éxito.
+//
+// Códigos de error conocidos:
+//   VALIDATION_ERROR  → datos incorrectos (mobile_location_id, partner_id, lines)
+//   FORBIDDEN         → la van no está en cfg.mobile_location_ids
+//   SERVER_MISCONFIG  → falta merma_location_id o picking type en Branch Config
+//   LOCKED            → la van está en uso (pipeline lock, reintentar)
+//   SERVER_ERROR      → excepción inesperada en el servidor
+
+export const GIFT_ERROR_CODES = {
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  FORBIDDEN: 'FORBIDDEN',
+  SERVER_MISCONFIG: 'SERVER_MISCONFIG',
+  LOCKED: 'LOCKED',
+  SERVER_ERROR: 'SERVER_ERROR',
+} as const;
+
+export type GiftErrorCode = keyof typeof GIFT_ERROR_CODES;
+
+export interface GiftCreateSuccess {
+  ok: true;
+  giftId: number;
+  giftName: string;
+  pickingId: number;
+  state: string;
+  userMessage: string;
+}
+
+export interface GiftCreateFailure {
+  ok: false;
+  code: GiftErrorCode | 'UNKNOWN';
+  message: string;
+  retryAfterSeconds?: number; // presente cuando code === 'LOCKED'
+}
+
+export type GiftCreateResult = GiftCreateSuccess | GiftCreateFailure;
+
+export interface GiftLine {
+  product_id: number;
+  qty: number;
+}
+
+export interface GiftCreatePayload {
+  analyticAccountId: number; // sanity-check local; el backend lo sobreescribe del token
+  idempotencyKey: string;
+  mobileLocationId: number;
+  partnerId: number;
+  visitLineId?: number | null;
+  lines: GiftLine[];
+  notes?: string;
+}
+
+export async function createGift(
+  payload: GiftCreatePayload,
+): Promise<GiftCreateResult> {
+  const body = {
+    meta: {
+      analytic_account_id: payload.analyticAccountId,
+      idempotency_key: payload.idempotencyKey,
+    },
+    data: {
+      mobile_location_id: payload.mobileLocationId,
+      partner_id: payload.partnerId,
+      ...(payload.visitLineId ? { visit_line_id: payload.visitLineId } : {}),
+      lines: payload.lines,
+      notes: payload.notes ?? '',
+      validate: true,
+    },
+  };
+
+  try {
+    const result = await postRest<Record<string, unknown>>(
+      'gf/salesops/gift/create',
+      body,
+    );
+
+    // ⚠️ CRÍTICO: este módulo usa { status: "error/busy" }, NO { ok: false }.
+    // unwrapRestResult no detecta estos errores — hay que inspeccionarlos aquí.
+    // Si no se verifica, un error de VALIDATION_ERROR pasaría silenciosamente
+    // como éxito con gift_id=0 y el chofer vería "Regalo registrado" en falso.
+    const status = typeof result?.status === 'string' ? result.status : 'ok';
+    if (status === 'error' || status === 'busy') {
+      const code = typeof result?.code === 'string' ? result.code : 'UNKNOWN';
+      const msg = typeof result?.user_message === 'string'
+        ? result.user_message
+        : 'Error desconocido';
+      const isKnownCode = code in GIFT_ERROR_CODES;
+      const errorData = result?.data && typeof result.data === 'object'
+        ? result.data as Record<string, unknown>
+        : {};
+
+      logWarn('general', 'gift_create_error_response', {
+        endpoint: 'gf/salesops/gift/create',
+        status,
+        code,
+        message: msg,
+        partner_id: payload.partnerId,
+        mobile_location_id: payload.mobileLocationId,
+      });
+
+      return {
+        ok: false,
+        code: isKnownCode ? (code as GiftErrorCode) : 'UNKNOWN',
+        message: msg,
+        ...(status === 'busy' && typeof errorData.retry_after === 'number'
+          ? { retryAfterSeconds: errorData.retry_after }
+          : {}),
+      };
+    }
+
+    // Éxito: { status: "ok", code: "OK", user_message, data: { gift_id, ... } }
+    const data = (result?.data != null ? result.data : {}) as Record<string, unknown>;
+    return {
+      ok: true,
+      giftId: toNumber(data.gift_id),
+      giftName: typeof data.gift_name === 'string' ? data.gift_name : '',
+      pickingId: toNumber(data.picking_id),
+      state: typeof data.state === 'string' ? data.state : 'done',
+      userMessage: typeof result?.user_message === 'string'
+        ? result.user_message
+        : 'Regalo registrado',
+    };
+  } catch (error: unknown) {
+    // Este path cubre: errores de red, HTTP 5xx que sí activan unwrapRestResult,
+    // y cualquier excepción inesperada. El campo "code" del backend no llega
+    // aquí porque unwrapRestResult solo extrae el message.
+    const msg = error instanceof Error ? error.message : String(error);
+
+    logWarn('general', 'gift_create_request_failed', {
+      endpoint: 'gf/salesops/gift/create',
+      message: msg,
+      partner_id: payload.partnerId,
+      mobile_location_id: payload.mobileLocationId,
+    });
+
+    return { ok: false, code: 'UNKNOWN', message: msg };
+  }
 }
 
 // ═══ Session ═══

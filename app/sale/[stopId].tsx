@@ -19,7 +19,7 @@ import { useAuthStore } from '../../src/stores/useAuthStore';
 import { SaveIndicator } from '../../src/components/ui/SaveIndicator';
 import { useSyncStore } from '../../src/stores/useSyncStore';
 import { useLocationStore } from '../../src/stores/useLocationStore';
-import { formatCurrency, formatPriceWithIVA } from '../../src/utils/time';
+import { formatCatalogPrice, formatCurrency } from '../../src/utils/time';
 import { takePhoto } from '../../src/services/camera';
 import { ProductPicker } from '../../src/components/domain/ProductPicker';
 import { shouldSkipStopCheckout } from '../../src/services/virtualStops';
@@ -143,9 +143,11 @@ export default function SaleScreen() {
     // BLD-20260408-P0: Detect off-route sales (virtual stops have negative IDs)
     const isOffRoute = stop.id < 0;
     const effectiveCompanyId = getEffectiveSalesCompanyId(companyId);
-    const pricelistId =
-      peekResolvedPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId }) ??
-      getCompanyFallbackPricelistId(effectiveCompanyId);
+    // Only send a pricelist_id when we have one confirmed from the partner's own
+    // data (source: partner_field or get_records). Company fallback (pricelist 81)
+    // is cached as null to prevent "Empresas incompatibles" when the partner
+    // belongs to a different Odoo company — Odoo assigns its default server-side.
+    const pricelistId = peekResolvedPartnerPricelistId(salePartnerId, { companyId: effectiveCompanyId });
 
     // Create sale order payload with idempotency key
     const payload = {
@@ -238,7 +240,7 @@ export default function SaleScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.productName}>{line.productName}</Text>
                 <Text style={styles.productInfo}>
-                  {formatPriceWithIVA(line.price)} c/IVA · Stock: {line.stock}
+                  {formatCatalogPrice(line.price)} · Stock: {line.stock}
                 </Text>
               </View>
               <View style={styles.qtyControls}>
@@ -295,7 +297,7 @@ export default function SaleScreen() {
             <Text style={styles.totalValue}>{formatCurrency(subtotal)}</Text>
           </View>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>IVA (16%)</Text>
+            <Text style={styles.totalLabel}>Impuestos</Text>
             <Text style={styles.totalValue}>{formatCurrency(tax)}</Text>
           </View>
           <View style={styles.totalRow}>
