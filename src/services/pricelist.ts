@@ -17,12 +17,7 @@
  */
 
 import { odooRead, odooRpc } from './odooRpc';
-import { postRpc, postRest } from './api';
-import {
-  shouldTryServerPricingEndpoint,
-  disableServerPricingEndpointIfMissing,
-  markServerPricingEndpointAvailable,
-} from './serverPricingEndpoint';
+import { postRpc } from './api';
 import {
   buildPartnerPricelistCandidates,
   computeRulePrice,
@@ -402,50 +397,14 @@ function findMatchingRule(
  * Returns Map<productId, customerPrice> or null if the endpoint is unavailable.
  */
 async function fetchServerSidePrices(
-  partnerId: number,
-  products: Array<{ id: number; list_price: number }>,
+  _partnerId: number,
+  _products: Array<{ id: number; list_price: number }>,
 ): Promise<Map<number, number> | null> {
-  if (!shouldTryServerPricingEndpoint()) {
-    return null;
-  }
-
-  try {
-    const result = await postRest<any>('gf/logistics/api/employee/truck_stock', {});
-
-    if (!result || typeof result !== 'object' || result.ok !== true) {
-      console.warn('[pricelist] truck_stock returned unexpected format');
-      return null;
-    }
-
-    markServerPricingEndpointAvailable();
-
-    const stockProducts: Array<{ id: number; list_price?: number }> =
-      result.data?.products ?? [];
-
-    const priceMap = new Map<number, number>();
-    const productIds = new Set(products.map((p) => p.id));
-    const productListPrices = new Map(products.map((p) => [p.id, p.list_price]));
-
-    for (const item of stockProducts) {
-      if (!item.id || !productIds.has(item.id)) continue;
-      const stockPrice = typeof item.list_price === 'number' ? item.list_price : null;
-      if (stockPrice === null || stockPrice <= 0) continue;
-      const listPrice = productListPrices.get(item.id) ?? 0;
-      if (Math.abs(stockPrice - listPrice) > 0.01) {
-        priceMap.set(item.id, stockPrice);
-      }
-    }
-
-    console.log(`[pricelist] truck_stock: ${priceMap.size} price overrides for partner ${partnerId}`);
-    return priceMap;
-  } catch (err) {
-    if (disableServerPricingEndpointIfMissing(err)) {
-      console.warn('[pricelist] truck_stock unavailable, backing off before retry.');
-      return null;
-    }
-    console.warn('[pricelist] truck_stock unavailable, falling back to client-side:', err);
-    return null;
-  }
+  // truck_stock returns warehouse-level catalog prices, not partner-specific
+  // prices, so it can't replace a customer pricing endpoint. Falls through to
+  // client-side pricelist computation, which correctly uses
+  // property_product_pricelist fetched via search_read.
+  return null;
 }
 
 /**

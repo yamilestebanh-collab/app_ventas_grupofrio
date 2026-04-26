@@ -32,8 +32,6 @@ import { resolveImplicitSaleAnalytics } from '../../src/services/saleAnalytics';
 import { logInfo } from '../../src/utils/logger';
 import { getLeadPartnerId } from '../../src/services/leadVisit';
 import { shouldRefreshProductsOnFocus } from '../../src/utils/productLoading';
-import { closeOffrouteVisit } from '../../src/services/gfLogistics';
-import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 
 export default function SaleScreen() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -190,38 +188,18 @@ export default function SaleScreen() {
     saleLines.forEach((l) => updateLocalStock(l.productId, -l.qty));
 
     if (shouldSkipStopCheckout(stop.id)) {
-      const closePayload = offrouteVisitId
-        ? {
-            visit_id: offrouteVisitId,
-            result_status: 'sale' as const,
-            latitude: latitude || 0,
-            longitude: longitude || 0,
-          }
-        : null;
-      if (closePayload) {
-        if (!isOnline) {
-          enqueue('offroute_visit_close', {
-            ...closePayload,
-            timestamp: Date.now(),
-          }, { dependsOn: [saleSyncId] });
-        } else {
-          try {
-            await closeOffrouteVisit(closePayload);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : 'No se pudo cerrar la visita especial.';
-            if (isRetryableSyncErrorMessage(message)) {
-              enqueue('offroute_visit_close', {
-                ...closePayload,
-                timestamp: Date.now(),
-              }, { dependsOn: [saleSyncId] });
-            } else {
-              Alert.alert(
-                'Cierre pendiente en servidor',
-                'La venta se guardó localmente, pero la visita especial no se pudo cerrar en backend.',
-              );
-            }
-          }
-        }
+      if (offrouteVisitId) {
+        // Enqueue with dependency so the backend receives the close ONLY after
+        // the sale order is confirmed. Calling closeOffrouteVisit directly while
+        // the sale is still queued caused the order to stay as a quotation with
+        // inventory already decremented (partial action_confirm on backend).
+        enqueue('offroute_visit_close', {
+          visit_id: offrouteVisitId,
+          result_status: 'sale' as const,
+          latitude: latitude || 0,
+          longitude: longitude || 0,
+          timestamp: Date.now(),
+        }, { dependsOn: [saleSyncId] });
       }
       removeStop(stop.id);
       resetVisit();
