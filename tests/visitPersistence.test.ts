@@ -11,6 +11,7 @@ interface VisitPersistenceModule {
       state: string;
       source_model: 'gf.route.stop';
     } | null;
+    offrouteVisitId: number | null;
     checkInTime: number | null;
     checkInLat: number | null;
     checkInLon: number | null;
@@ -19,6 +20,7 @@ interface VisitPersistenceModule {
     phase: string;
     currentStopId: number;
     currentStop: { id: number; customer_name: string };
+    offrouteVisitId: number | null;
     checkInTime: number;
     checkInLat: number | null;
     checkInLon: number | null;
@@ -45,6 +47,7 @@ function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
       state: 'in_progress',
       source_model: 'gf.route.stop',
     },
+    offrouteVisitId: null,
     checkInTime: 123456,
     checkInLat: 19.4,
     checkInLon: -99.1,
@@ -61,6 +64,7 @@ function testBuildActiveVisitSnapshot(module: VisitPersistenceModule) {
       state: 'in_progress',
       source_model: 'gf.route.stop',
     },
+    offrouteVisitId: null,
     checkInTime: 123456,
     checkInLat: 19.4,
     checkInLon: -99.1,
@@ -73,6 +77,7 @@ function testIdleVisitDoesNotPersist(module: VisitPersistenceModule) {
     phase: 'idle',
     currentStopId: null,
     currentStop: null,
+    offrouteVisitId: null,
     checkInTime: null,
     checkInLat: null,
     checkInLon: null,
