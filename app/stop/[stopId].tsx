@@ -18,6 +18,7 @@ import { GeoFenceBar } from '../../src/components/ui/GeoFenceBar';
 import { Badge } from '../../src/components/ui/Badge';
 import { Button } from '../../src/components/ui/Button';
 import { Card } from '../../src/components/ui/Card';
+import { AlertBanner } from '../../src/components/ui/AlertBanner';
 import { ScoreCard } from '../../src/components/domain/ScoreCard';
 import { ForecastCard } from '../../src/components/domain/ForecastCard';
 import { colors, spacing, radii } from '../../src/theme/tokens';
@@ -34,8 +35,9 @@ import { visitTelemetryCounters } from '../../src/utils/visitTelemetry';
 import { getLeadActionVisibility } from '../../src/services/leadVisit';
 
 export default function StopDetailScreen() {
-  const { stopId } = useLocalSearchParams<{ stopId: string }>();
+  const { stopId, giftSuccess } = useLocalSearchParams<{ stopId: string; giftSuccess?: string }>();
   const router = useRouter();
+  const [giftSuccessMessage, setGiftSuccessMessage] = React.useState<string | null>(null);
   const stops = useRouteStore((s) => s.stops);
   const stop = stops.find((s) => s.id === Number(stopId));
 
@@ -51,6 +53,13 @@ export default function StopDetailScreen() {
     }
     return () => useLocationStore.getState().clearTarget();
   }, [stop?.id]);
+
+  React.useEffect(() => {
+    if (typeof giftSuccess !== 'string' || giftSuccess.trim().length === 0) return;
+    setGiftSuccessMessage(giftSuccess);
+    const timer = setTimeout(() => setGiftSuccessMessage(null), 3500);
+    return () => clearTimeout(timer);
+  }, [giftSuccess]);
 
   if (!stop) {
     return (
@@ -115,6 +124,13 @@ export default function StopDetailScreen() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         {/* Geo-fence indicator */}
         <GeoFenceBar isOk={isGeoOk} distanceMeters={distance} />
+        {giftSuccessMessage ? (
+          <AlertBanner
+            variant="success"
+            icon="✓"
+            message={giftSuccessMessage}
+          />
+        ) : null}
 
         {/* KoldScore card — actionable intelligence */}
         {hasScore ? (
@@ -193,6 +209,15 @@ export default function StopDetailScreen() {
                 disabled={!visitGuard.canAccessVisitActions}
               />
             ) : null}
+            {actionVisibility.showGift ? (
+              <Button
+                label="🎁 Regalo"
+                variant="secondary"
+                onPress={() => router.push(`/gift/${stop.id}?from=stop` as never)}
+                style={{ flex: 1 }}
+                disabled={!visitGuard.canAccessVisitActions}
+              />
+            ) : null}
             {actionVisibility.showNoSale ? (
               <Button
                 label="✕ No venta"
@@ -208,14 +233,7 @@ export default function StopDetailScreen() {
               label="⭐ Lealtad"
               variant="secondary"
               onPress={() => Alert.alert('Lealtad', 'F8: Programa de lealtad')}
-              style={{ flex: 1 }}
-            />
-            <Button
-              label="🎁 Regalo"
-              variant="secondary"
-              onPress={() => router.push(`/gift/${stop.id}` as never)}
-              style={{ flex: 1 }}
-              disabled={!visitGuard.canAccessVisitActions}
+              fullWidth
             />
           </View>
         </View>

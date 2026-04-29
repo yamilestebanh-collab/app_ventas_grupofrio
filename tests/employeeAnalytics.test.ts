@@ -7,14 +7,25 @@ interface EmployeeAnalyticsModule {
   };
 }
 
-function testExtractsAnalyticPlazaFromRealEmployeeField(module: EmployeeAnalyticsModule) {
+function testExtractsAnalyticPlazaFromNewFieldName(module: EmployeeAnalyticsModule) {
   const actual = module.extractEmployeeAnalyticPlaza({
-    x_analytic_account_id: [820, 'Iguala'],
+    x_analytic_un_id: [820, 'Iguala'],
   });
 
   assert.deepEqual(actual, {
     id: 820,
     name: 'Iguala',
+  });
+}
+
+function testExtractsAnalyticPlazaFromLegacyFieldName(module: EmployeeAnalyticsModule) {
+  const actual = module.extractEmployeeAnalyticPlaza({
+    x_analytic_account_id: [818, 'Guadalajara'],
+  });
+
+  assert.deepEqual(actual, {
+    id: 818,
+    name: 'Guadalajara',
   });
 }
 
@@ -24,7 +35,8 @@ async function main() {
     new URL('../src/services/employeeAnalytics.ts', import.meta.url).pathname
   ) as EmployeeAnalyticsModule;
 
-  testExtractsAnalyticPlazaFromRealEmployeeField(module);
+  testExtractsAnalyticPlazaFromNewFieldName(module);
+  testExtractsAnalyticPlazaFromLegacyFieldName(module);
   console.log('employee analytics tests: ok');
 }
 

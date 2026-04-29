@@ -7,7 +7,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors, radii } from '../../theme/tokens';
 
-type AlertVariant = 'critical' | 'warning' | 'info';
+type AlertVariant = 'critical' | 'warning' | 'info' | 'success';
 
 interface AlertBannerProps {
   message: string;
@@ -30,6 +30,11 @@ const variantStyles: Record<AlertVariant, { bg: string; border: string; text: st
     bg: colors.infoAlpha08,
     border: 'rgba(59,130,246,0.15)',
     text: colors.info,
+  },
+  success: {
+    bg: colors.successAlpha08,
+    border: 'rgba(34,197,94,0.15)',
+    text: colors.success,
   },
 };
 

@@ -40,17 +40,24 @@ export function deriveVisitGuard({
   const hasAnotherActiveVisit = hasValidActiveVisit && currentStopId !== stopId;
   const isCompletedStop = isCompletedStopState(stopState);
   const canStartVisit = stopState === 'pending' && !hasAnotherActiveVisit;
+
+  // BLD-20260426: Allow resuming an "orphaned" in_progress visit.
+  // This handles the case where the visit store lost its state (app kill,
+  // failed rehydration, navigation) but the stop is still in_progress on
+  // the backend. Without this, the user is deadlocked — can't resume and
+  // can't start a new visit on this stop.
   const canResumeVisit = stopState === 'in_progress' && isCurrentVisit;
-  const canAccessVisitActions = canResumeVisit;
+  const canResumeOrphanedVisit =
+    stopState === 'in_progress' && !isCurrentVisit && !hasAnotherActiveVisit;
+  const canResume = canResumeVisit || canResumeOrphanedVisit;
+  const canAccessVisitActions = canResume;
 
   let primaryActionLabel = '📍 Check-in · Iniciar Visita';
 
   if (isCompletedStop) {
     primaryActionLabel = stopState === 'done' ? '✓ Visita completada' : '⛔ Parada cerrada';
-  } else if (canResumeVisit) {
+  } else if (canResume) {
     primaryActionLabel = '▶ Continuar Visita';
-  } else if (stopState === 'in_progress') {
-    primaryActionLabel = '🔵 Visita en progreso';
   } else if (hasAnotherActiveVisit) {
     primaryActionLabel = '🔒 Otra visita en curso';
   }
@@ -60,7 +67,7 @@ export function deriveVisitGuard({
     isCurrentVisit,
     hasAnotherActiveVisit,
     canStartVisit,
-    canResumeVisit,
+    canResumeVisit: canResume,
     canAccessVisitActions,
     primaryActionLabel,
   };

@@ -30,7 +30,11 @@ import { getLeadActionVisibility } from '../../src/services/leadVisit';
 const GEOFENCE_RADIUS_M = 50;
 
 export default function CheckinScreen() {
-  const { stopId, exchangeMessage } = useLocalSearchParams<{ stopId: string; exchangeMessage?: string }>();
+  const {
+    stopId,
+    exchangeMessage,
+    giftSuccess,
+  } = useLocalSearchParams<{ stopId: string; exchangeMessage?: string; giftSuccess?: string }>();
   const router = useRouter();
   const stops = useRouteStore((s) => s.stops);
   const updateStopState = useRouteStore((s) => s.updateStopState);
@@ -53,20 +57,37 @@ export default function CheckinScreen() {
   const activeVisitForStop = currentStopId === Number(stopId)
     && (phase === 'checked_in' || phase === 'selling' || phase === 'no_selling');
 
+  // BLD-20260426: Auto-restore orphaned in_progress visits.
+  // If the stop is in_progress but the visit store has no record (app kill,
+  // failed rehydration), re-adopt the visit so the user sees the post-checkin
+  // screen and can continue working.
+  const isOrphanedInProgress =
+    stop?.state === 'in_progress' && !activeVisitForStop && phase === 'idle';
+  useEffect(() => {
+    if (isOrphanedInProgress && stop) {
+      const lat = latitude || 0;
+      const lon = longitude || 0;
+      startVisit(stop, lat, lon);
+    }
+  }, [isOrphanedInProgress, stop?.id]);
+
   const [gpsLoading, setGpsLoading] = useState(true);
   const [checkingIn, setCheckingIn] = useState(false); // Prevent double-tap
   const [flashMessage, setFlashMessage] = useState<string | null>(null);
-  const handledExchangeMessageRef = useRef<string | null>(null);
+  const handledFlashMessageRef = useRef<string | null>(null);
   const isOffrouteVisit = !!stop?._isOffroute;
 
   useEffect(() => {
-    if (typeof exchangeMessage !== 'string' || exchangeMessage.trim().length === 0) return;
-    if (handledExchangeMessageRef.current === exchangeMessage) return;
-    handledExchangeMessageRef.current = exchangeMessage;
-    setFlashMessage(exchangeMessage);
+    const nextMessage = typeof giftSuccess === 'string' && giftSuccess.trim().length > 0
+      ? giftSuccess
+      : exchangeMessage;
+    if (typeof nextMessage !== 'string' || nextMessage.trim().length === 0) return;
+    if (handledFlashMessageRef.current === nextMessage) return;
+    handledFlashMessageRef.current = nextMessage;
+    setFlashMessage(nextMessage);
     const timeout = setTimeout(() => setFlashMessage(null), 2500);
     return () => clearTimeout(timeout);
-  }, [exchangeMessage]);
+  }, [exchangeMessage, giftSuccess]);
 
   // Timer tick
   useEffect(() => {
@@ -447,6 +468,16 @@ export default function CheckinScreen() {
             >
               <Text style={styles.actionIcon}>🧾</Text>
               <Text style={styles.actionLabel}>Hacer Venta</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {actionVisibility.showGift ? (
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => router.push(`/gift/${stop.id}?from=checkin` as never)}
+            >
+              <Text style={styles.actionIcon}>🎁</Text>
+              <Text style={styles.actionLabel}>Registrar Regalo</Text>
             </TouchableOpacity>
           ) : null}
 

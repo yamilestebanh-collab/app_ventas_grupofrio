@@ -86,6 +86,22 @@ function testStaleActiveVisitDoesNotBlockStart(visitGuards: VisitGuardModule) {
   assert.equal(guard.primaryActionLabel, '📍 Check-in · Iniciar Visita');
 }
 
+function testOrphanedInProgressCanResume(visitGuards: VisitGuardModule) {
+  // BLD-20260426: visit store lost state (phase=idle) but stop is
+  // still in_progress on backend — user should be able to resume.
+  const guard = visitGuards.deriveVisitGuard({
+    stopState: 'in_progress',
+    stopId: 10,
+    currentStopId: null,
+    phase: 'idle',
+  });
+
+  assert.equal(guard.canStartVisit, false);
+  assert.equal(guard.canResumeVisit, true);
+  assert.equal(guard.canAccessVisitActions, true);
+  assert.equal(guard.primaryActionLabel, '▶ Continuar Visita');
+}
+
 async function main() {
   // @ts-ignore -- Node v24 runs this ESM test harness directly.
   const visitGuards = await import(
@@ -98,6 +114,7 @@ async function main() {
   testCompletedStopBlocksRestart(visitGuards);
   testAnotherActiveVisitBlocksStart(visitGuards);
   testStaleActiveVisitDoesNotBlockStart(visitGuards);
+  testOrphanedInProgressCanResume(visitGuards);
   console.log('visit guards tests: ok');
 }
 

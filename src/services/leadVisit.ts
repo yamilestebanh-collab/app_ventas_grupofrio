@@ -44,17 +44,19 @@ export function getLeadActionVisibility(
   stop: Pick<GFStop, '_entityType' | '_partnerId' | 'partner_id'>,
 ): {
   showData: boolean;
+  showGift: boolean;
   showSale: boolean;
   showNoSale: boolean;
 } {
   const isLead = stop._entityType === 'lead';
   if (!isLead) {
-    return { showData: false, showSale: true, showNoSale: true };
+    return { showData: false, showGift: true, showSale: true, showNoSale: true };
   }
 
   const sellable = isLeadSellable(stop);
   return {
     showData: true,
+    showGift: true,
     showSale: sellable,
     // BLD-20260424-BUGC: la "No Venta" es un evento de visita ("vine,
     // intenté, no fue posible"), NO una transacción comercial. No

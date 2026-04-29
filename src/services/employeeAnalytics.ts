@@ -19,6 +19,7 @@ function extractName(value: unknown): string {
 
 export function extractEmployeeAnalyticPlaza(payload: Record<string, unknown>): EmployeeAnalyticPlaza {
   const raw =
+    payload.x_analytic_un_id ??
     payload.x_analytic_account_id ??
     payload.employee_analytic_plaza_id ??
     payload.analytic_plaza_id ??

@@ -16,11 +16,16 @@ type OffrouteSearchOptions = {
   analyticPlazaId?: number | null;
 };
 
-function withAnalyticPlazaFilter(domain: unknown[], analyticPlazaId?: number | null): unknown[] {
+/**
+ * Append an analytic-plaza filter for res.partner.
+ * Field is `x_analytic_un_id` (Studio many2one → account.analytic.account).
+ * crm.lead does NOT have this field — use withoutAnalyticFilter for leads.
+ */
+function withPartnerAnalyticFilter(domain: unknown[], analyticPlazaId?: number | null): unknown[] {
   if (typeof analyticPlazaId !== 'number' || analyticPlazaId <= 0) {
     return domain;
   }
-  return ['&', ['x_analytic_account_id', '=', analyticPlazaId], ...domain];
+  return ['&', ['x_analytic_un_id', '=', analyticPlazaId], ...domain];
 }
 
 async function searchCustomers(domain: unknown[]): Promise<OffrouteCustomerRecord[]> {
@@ -54,7 +59,7 @@ export async function searchOffrouteEntities(
   const q = query.trim();
   if (q.length < 3) return [];
 
-  const customerDomain = withAnalyticPlazaFilter([
+  const customerDomain = withPartnerAnalyticFilter([
     '&',
     ['customer_rank', '>', 0],
     '|', '|',
@@ -63,14 +68,15 @@ export async function searchOffrouteEntities(
     ['vat', 'ilike', q],
   ], options.analyticPlazaId);
 
-  const leadDomain = withAnalyticPlazaFilter([
+  // crm.lead does NOT have x_analytic_un_id — no analytic filter applied.
+  const leadDomain = [
     '|', '|', '|', '|',
     ['name', 'ilike', q],
     ['partner_name', 'ilike', q],
     ['phone', 'ilike', q],
     ['mobile', 'ilike', q],
     ['email_from', 'ilike', q],
-  ], options.analyticPlazaId);
+  ];
 
   const [customersResult, leadsResult] = await Promise.allSettled([
     searchCustomers(customerDomain),

@@ -62,6 +62,9 @@ async function buildHeaders(): Promise<Record<string, string>> {
   }
   if (gfToken) {
     headers['X-GF-Employee-Token'] = sanitizeHeaderValue(gfToken);
+    // gf_salesops guard expects X-GF-Token (different from logistics).
+    // Send the same token under both names so both auth systems work.
+    headers['X-GF-Token'] = sanitizeHeaderValue(gfToken);
   }
 
   return headers;

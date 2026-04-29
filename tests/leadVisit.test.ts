@@ -38,6 +38,7 @@ function testLeadWithoutPartnerShowsDataAndNoSale(module: LeadVisitModule) {
 
   assert.deepEqual(visibility, {
     showData: true,
+    showGift: true,
     showSale: false,
     showNoSale: true,
   });
@@ -51,6 +52,7 @@ function testLeadWithPartnerShowsAllActions(module: LeadVisitModule) {
 
   assert.deepEqual(visibility, {
     showData: true,
+    showGift: true,
     showSale: true,
     showNoSale: true,
   });
