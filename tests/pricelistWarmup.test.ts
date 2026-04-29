@@ -34,9 +34,9 @@ interface PricelistModule {
 function testCompany34UsesExpectedFallbackPricelist(module: PricelistModule) {
   assert.equal(module.DEFAULT_SALES_COMPANY_ID, 34);
   assert.equal(module.getEffectiveSalesCompanyId(null), 34);
-  assert.equal(module.getCompanyFallbackPricelistId(34), 81);
+  assert.equal(module.getCompanyFallbackPricelistId(34), 104);
   assert.equal(module.getCompanyFallbackPricelistId(1), null);
-  assert.equal(module.getCompanyFallbackPricelistId(null), 81);
+  assert.equal(module.getCompanyFallbackPricelistId(null), 104);
 }
 
 function testPricelistCompatibilityFavorsCompany34(module: PricelistModule) {
