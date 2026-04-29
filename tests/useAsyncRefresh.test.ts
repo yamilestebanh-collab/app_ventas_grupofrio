@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { runRefreshTask } from '../src/hooks/useAsyncRefresh';
+import { runRefreshTask } from '../src/hooks/useAsyncRefresh.ts';
 
 async function testRefreshLifecycleSuccess() {
   const states: boolean[] = [];
