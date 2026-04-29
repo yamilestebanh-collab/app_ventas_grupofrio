@@ -4,7 +4,7 @@ import {
   computeRulePrice,
   getPreferredPartnerPricelistId,
   roundToPricelistStep,
-} from '../src/services/pricelistLogic';
+} from '../src/services/pricelistLogic.ts';
 
 function testBuildPartnerPricelistCandidates() {
   assert.deepEqual(
