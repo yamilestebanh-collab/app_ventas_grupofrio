@@ -32,7 +32,7 @@ function testExtractsAnalyticPlazaFromLegacyFieldName(module: EmployeeAnalyticsM
 async function main() {
   const module = await import(
     // @ts-ignore -- import.meta only used in test runtime.
-    new URL('../src/services/employeeAnalytics.ts', import.meta.url).pathname
+    new URL('../src/services/extractEmployeeAnalyticPlaza.ts', import.meta.url).pathname
   ) as EmployeeAnalyticsModule;
 
   testExtractsAnalyticPlazaFromNewFieldName(module);
