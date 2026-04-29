@@ -55,7 +55,7 @@ function main() {
 
   assert.match(
     offrouteSearch,
-    /x_analytic_account_id/,
+    /x_analytic_un_id/,
     'la búsqueda de visita especial debe filtrar por plaza analítica',
   );
 

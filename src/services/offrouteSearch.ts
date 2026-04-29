@@ -18,8 +18,15 @@ type OffrouteSearchOptions = {
 
 /**
  * Append an analytic-plaza filter for res.partner.
+ *
  * Field is `x_analytic_un_id` (Studio many2one → account.analytic.account).
- * crm.lead does NOT have this field — use withoutAnalyticFilter for leads.
+ * Naming caveat: a pesar del nombre `_un_`, este campo está acotado en
+ * `gf_saleops/models/res_partner.py` con `domain=[('plan_id', '=', 2)]`,
+ * es decir, apunta a la dimensión PLAZA (Iguala, GDL, CDMX…), NO a la
+ * dimensión "Unidad de Negocio" (Hub, CEDIS, Planta…) que vive en plan 12.
+ * Las IDs aquí coinciden con `hr.employee.x_analytic_account_id`, por lo
+ * que pasar la plaza del empleado como filtro funciona correctamente.
+ * crm.lead NO tiene este campo — los leads no se filtran por plaza.
  */
 function withPartnerAnalyticFilter(domain: unknown[], analyticPlazaId?: number | null): unknown[] {
   if (typeof analyticPlazaId !== 'number' || analyticPlazaId <= 0) {
