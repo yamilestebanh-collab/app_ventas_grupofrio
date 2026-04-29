@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const REPO_ROOT = process.cwd();
 
 interface VisitTelemetryModule {
   visitTelemetryCounters: {
@@ -32,11 +35,11 @@ function testCallSitesAreWired() {
   // one of them the ghost-stop telemetry silently stops — these asserts
   // fail loudly instead.
   const routeStore = readFileSync(
-    '/Users/sebis/Desktop/app-ventas-v2/src/stores/useRouteStore.ts',
+    resolve(REPO_ROOT, 'src/stores/useRouteStore.ts'),
     'utf8',
   );
   const stopScreen = readFileSync(
-    '/Users/sebis/Desktop/app-ventas-v2/app/stop/[stopId].tsx',
+    resolve(REPO_ROOT, 'app/stop/[stopId].tsx'),
     'utf8',
   );
 

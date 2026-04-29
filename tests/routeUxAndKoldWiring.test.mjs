@@ -1,28 +1,31 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const REPO_ROOT = process.cwd();
 
 const mapScreen = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/app/map.tsx',
+  resolve(REPO_ROOT, 'app/map.tsx'),
   'utf8',
 );
 const topBar = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/src/components/ui/TopBar.tsx',
+  resolve(REPO_ROOT, 'src/components/ui/TopBar.tsx'),
   'utf8',
 );
 const pricelistCache = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/src/services/pricelistCache.ts',
+  resolve(REPO_ROOT, 'src/services/pricelistCache.ts'),
   'utf8',
 );
 const offrouteSearch = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/src/services/offrouteSearch.ts',
+  resolve(REPO_ROOT, 'src/services/offrouteSearch.ts'),
   'utf8',
 );
 const routeStore = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/src/stores/useRouteStore.ts',
+  resolve(REPO_ROOT, 'src/stores/useRouteStore.ts'),
   'utf8',
 );
 const visitStore = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/src/stores/useVisitStore.ts',
+  resolve(REPO_ROOT, 'src/stores/useVisitStore.ts'),
   'utf8',
 );
 

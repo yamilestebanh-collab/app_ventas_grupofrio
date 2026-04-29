@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const REPO_ROOT = process.cwd();
 
 // These are source-level guards for the migration of sales/payments
 // from the legacy /api/create_update path (sale.order / account.payment,
@@ -9,11 +12,11 @@ import { readFileSync } from 'node:fs';
 
 function main() {
   const gfLogistics = readFileSync(
-    '/Users/sebis/Desktop/app-ventas-v2/src/services/gfLogistics.ts',
+    resolve(REPO_ROOT, 'src/services/gfLogistics.ts'),
     'utf8',
   );
   const syncStore = readFileSync(
-    '/Users/sebis/Desktop/app-ventas-v2/src/stores/useSyncStore.ts',
+    resolve(REPO_ROOT, 'src/stores/useSyncStore.ts'),
     'utf8',
   );
 

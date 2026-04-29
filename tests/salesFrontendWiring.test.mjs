@@ -1,24 +1,27 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const REPO_ROOT = process.cwd();
 
 const gfLogistics = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/src/services/gfLogistics.ts',
+  resolve(REPO_ROOT, 'src/services/gfLogistics.ts'),
   'utf8',
 );
 const salesTab = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/app/(tabs)/sales.tsx',
+  resolve(REPO_ROOT, 'app/(tabs)/sales.tsx'),
   'utf8',
 );
 const routeTab = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/app/(tabs)/route.tsx',
+  resolve(REPO_ROOT, 'app/(tabs)/route.tsx'),
   'utf8',
 );
 const homeTab = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/app/(tabs)/index.tsx',
+  resolve(REPO_ROOT, 'app/(tabs)/index.tsx'),
   'utf8',
 );
 const analyticsScreen = readFileSync(
-  '/Users/sebis/Desktop/app-ventas-v2/app/analytics.tsx',
+  resolve(REPO_ROOT, 'app/analytics.tsx'),
   'utf8',
 );
 

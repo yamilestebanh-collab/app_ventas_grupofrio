@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const REPO_ROOT = process.cwd();
 
 function main() {
   const checkinScreen = readFileSync(
-    '/Users/sebis/Desktop/app-ventas-v2/app/checkin/[stopId].tsx',
+    resolve(REPO_ROOT, 'app/checkin/[stopId].tsx'),
     'utf8',
   );
   const postvisitScreen = readFileSync(
-    '/Users/sebis/Desktop/app-ventas-v2/app/postvisit/[stopId].tsx',
+    resolve(REPO_ROOT, 'app/postvisit/[stopId].tsx'),
     'utf8',
   );
 
