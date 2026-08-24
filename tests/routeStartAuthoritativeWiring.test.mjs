@@ -331,12 +331,12 @@ function main() {
   );
   assert.match(
     routeStartScreen,
-    /const canRequestStart = plan\?\.state === 'published' && readyToStartLive && isOnline;[\s\S]*?const canContinue = \(serverStarted && readyToStartLive\) \|\| canRequestStart;/,
+    /const canRequestStart = plan\?\.state === 'published' && readyToStartLive && isPotentiallyOnline;[\s\S]*?const canContinue = \(serverStarted && readyToStartLive\) \|\| canRequestStart;/,
     'UI eligibility must not unlock continue merely because plan.state is in_progress',
   );
   assert.match(
     handleStart,
-    /buildRouteStartUiState\(\{\s*planState:\s*currentPlan\.state,\s*readyToStart:\s*currentReadyToStart,\s*isOnline:\s*useSyncStore\.getState\(\)\.isOnline,\s*\}\)/,
+    /buildRouteStartUiState\(\{\s*planState:\s*currentPlan\.state,\s*readyToStart:\s*currentReadyToStart,\s*isOnline:\s*useSyncStore\.getState\(\)\.isPotentiallyOnline,\s*\}\)/,
     'the programmatic hard guard must use the exhaustively tested plan-state decision helper',
   );
   assert.match(
