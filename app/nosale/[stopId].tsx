@@ -25,6 +25,11 @@ import { checkOut, closeOffrouteVisit } from '../../src/services/gfLogistics';
 import { setGpsMode, captureAndEnqueueGpsPoint } from '../../src/services/gps';
 import { isRetryableSyncErrorMessage } from '../../src/utils/syncFailure';
 import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
+import {
+  DayBundleActionBlockedError,
+  assertCurrentEmployeeDayBundleAllowsActions,
+  describeDayBundleActionBlock,
+} from '../../src/services/dayBundleMutationGate';
 import { enqueueVisitPhotos } from '../../src/services/visitPhotos';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import {
@@ -185,9 +190,28 @@ export default function NoSaleScreen() {
 
   async function handleSave() {
     if (!singleFlightRef.current.tryAcquire()) return;
-    if (!dayBundleAccess?.canRunActions) {
+    try {
+      await assertCurrentEmployeeDayBundleAllowsActions();
+    } catch (error) {
       singleFlightRef.current.release();
-      Alert.alert('Bundle vencido', 'La no-venta está bloqueada hasta renovar el bundle del día con conexión.');
+      const bundleAlert = error instanceof DayBundleActionBlockedError
+        ? describeDayBundleActionBlock(error)
+        : { title: 'Bundle no disponible', message: error instanceof Error ? error.message : 'Renueva el bundle del día antes de registrar la no-venta.' };
+      Alert.alert(
+        bundleAlert.title,
+        bundleAlert.message,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Renovar ahora',
+            onPress: () => {
+              void useEmployeeDayBundleStore.getState().prepare().catch((refreshError) => {
+                Alert.alert('No se pudo renovar el bundle', refreshError instanceof Error ? refreshError.message : 'Verifica tu conexión e intenta de nuevo.');
+              });
+            },
+          },
+        ],
+      );
       return;
     }
     if (validationIssue) {

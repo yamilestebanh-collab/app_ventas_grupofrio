@@ -16,7 +16,12 @@ import {
   phoneChanged,
   validateCustomerContactForm,
 } from '../../src/services/customerContactUpdate';
-import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
+import {
+  DayBundleActionBlockedError,
+  assertCurrentEmployeeDayBundleAllowsActions,
+  describeDayBundleActionBlock,
+} from '../../src/services/dayBundleMutationGate';
+import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 
 export default function CustomerEditScreen() {
   const { partnerId, stopId } = useLocalSearchParams<{ partnerId: string; stopId?: string }>();
@@ -58,7 +63,24 @@ export default function CustomerEditScreen() {
     try {
       await assertCurrentEmployeeDayBundleAllowsActions();
     } catch (error) {
-      Alert.alert('Bundle vencido', error instanceof Error ? error.message : 'Renueva el bundle del día antes de editar el contacto.');
+      const bundleAlert = error instanceof DayBundleActionBlockedError
+        ? describeDayBundleActionBlock(error)
+        : { title: 'Bundle no disponible', message: error instanceof Error ? error.message : 'Renueva el bundle del día antes de editar el contacto.' };
+      Alert.alert(
+        bundleAlert.title,
+        bundleAlert.message,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Renovar ahora',
+            onPress: () => {
+              void useEmployeeDayBundleStore.getState().prepare().catch((refreshError) => {
+                Alert.alert('No se pudo renovar el bundle', refreshError instanceof Error ? refreshError.message : 'Verifica tu conexión e intenta de nuevo.');
+              });
+            },
+          },
+        ],
+      );
       return;
     }
     setSaving(true);
