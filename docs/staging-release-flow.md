@@ -12,8 +12,8 @@ Definir un flujo simple para un equipo de 3 personas donde `staging` sirva para 
   - no se distribuye para QA formal
 - `staging`
   - uso interno del equipo
-  - backend: `https://grupofrio-gf-staging280826-37133857.dev.odoo.com`
-  - DB: `grupofrio-gf-staging280826-37133857`
+  - backend: `https://grupofrio-gf-staging280826-37235488.dev.odoo.com`
+  - DB: `grupofrio-gf-staging280826-37235488`
 - `production`
   - uso operativo real
   - backend: `https://grupofrio-gf.odoo.com`
