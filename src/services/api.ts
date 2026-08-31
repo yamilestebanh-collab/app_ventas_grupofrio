@@ -5,6 +5,7 @@
  */
 
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
+import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { deleteAllAuthCredentialKeys, replaceAuthCredentialValues } from './authCredentialCleanup';
 import { logError, logInfo } from '../utils/logger';
@@ -19,11 +20,19 @@ import {
 } from './apiRequestError';
 import { readPostRestResponseText } from './postRestResponse';
 import { createUuidV4 } from '../utils/clientEvent';
+import {
+  buildEnvironmentStorageKey,
+  getRuntimeAppEnvironment,
+} from '../config/appEnvironment.ts';
+
+const APP_ENVIRONMENT = getRuntimeAppEnvironment(
+  Constants.expoConfig?.extra?.appEnvironment as string | undefined,
+);
 
 const STORE_KEYS = {
-  BASE_URL: 'kf_base_url',
-  GF_TOKEN: 'kf_gf_token',
-  SESSION_ID: 'kf_employee_session_id',
+  BASE_URL: buildEnvironmentStorageKey(APP_ENVIRONMENT, 'kf_base_url'),
+  GF_TOKEN: buildEnvironmentStorageKey(APP_ENVIRONMENT, 'kf_gf_token'),
+  SESSION_ID: buildEnvironmentStorageKey(APP_ENVIRONMENT, 'kf_employee_session_id'),
 } as const;
 
 const PUBLIC_DEFAULT_BASE_URL = (process.env as Record<string, string | undefined>)[

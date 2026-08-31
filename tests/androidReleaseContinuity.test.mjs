@@ -5,17 +5,22 @@ import { resolve } from 'node:path';
 const repoRoot = process.cwd();
 const expectedVersionCode = 5;
 const expectedVersionName = '1.4.1';
+const { buildExpoConfig } = await import('../app.config.ts');
 
-const appConfig = JSON.parse(readFileSync(resolve(repoRoot, 'app.json'), 'utf8'));
+const appConfig = buildExpoConfig({
+  EXPO_PUBLIC_APP_ENV: 'production',
+  EXPO_PUBLIC_KF_DEFAULT_BASE_URL: 'https://grupofrio-gf.odoo.com',
+  EXPO_PUBLIC_KF_ODOO_DB: 'grupofrio-gf-main-34980678',
+});
 assert.equal(
-  appConfig.expo.android.versionCode,
+  appConfig.android.versionCode,
   expectedVersionCode,
-  'app.json must advance Android versionCode for an in-place field update',
+  'Expo config must advance Android versionCode for an in-place field update',
 );
 assert.equal(
-  appConfig.expo.version,
+  appConfig.version,
   expectedVersionName,
-  'app.json must identify the bearer-auth field release',
+  'Expo config must identify the bearer-auth field release',
 );
 
 const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));

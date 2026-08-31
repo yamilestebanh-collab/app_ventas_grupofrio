@@ -5,9 +5,14 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, sizes, radii } from '../../theme/tokens';
 import { typography } from '../../theme/typography';
+import {
+  buildEnvironmentLabel,
+  getRuntimeAppEnvironment,
+} from '../../config/appEnvironment.ts';
 
 interface TopBarProps {
   title: string;
@@ -20,6 +25,10 @@ interface TopBarProps {
 export function TopBar({ title, showBack = false, onBack, rightAction, rightIcon }: TopBarProps) {
   const router = useRouter();
   const handleBack = onBack ?? (() => router.back());
+  const environment = getRuntimeAppEnvironment(
+    Constants.expoConfig?.extra?.appEnvironment as string | undefined,
+  );
+  const environmentLabel = buildEnvironmentLabel(environment);
 
   return (
     <View style={styles.container}>
@@ -36,9 +45,16 @@ export function TopBar({ title, showBack = false, onBack, rightAction, rightIcon
         <View style={{ width: showBack ? sizes.backButton : 0 }} />
       )}
 
-      <Text style={[typography.screenTitle, styles.title]} numberOfLines={1}>
-        {title}
-      </Text>
+      <View style={styles.titleWrap}>
+        <Text style={[typography.screenTitle, styles.title]} numberOfLines={1}>
+          {title}
+        </Text>
+        {environmentLabel ? (
+          <View style={styles.environmentBadge}>
+            <Text style={styles.environmentBadgeText}>{environmentLabel}</Text>
+          </View>
+        ) : null}
+      </View>
 
       {rightAction ? (
         <TouchableOpacity onPress={rightAction.onPress}>
@@ -77,6 +93,23 @@ const styles = StyleSheet.create({
   },
   title: {
     flex: 1,
+  },
+  titleWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  environmentBadge: {
+    backgroundColor: colors.error,
+    borderRadius: radii.badge,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 2,
+  },
+  environmentBadgeText: {
+    color: colors.textOnPrimary,
+    fontSize: 11,
+    fontWeight: '700',
   },
   action: {
     fontSize: 12,

@@ -11,34 +11,56 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_APP_ENV": "development",
         "EXPO_PUBLIC_BUILD_PROFILE": "development",
-        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
-        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf-staging280826-37133857.dev.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-staging280826-37133857"
       }
     },
-    "preview": {
+    "staging-android": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BUILD_PROFILE": "preview",
-        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
-        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
+        "EXPO_PUBLIC_APP_ENV": "staging",
+        "EXPO_PUBLIC_BUILD_PROFILE": "staging",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf-staging280826-37133857.dev.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-staging280826-37133857"
       }
     },
-    "production": {
+    "staging-ios": {
+      "ios": {},
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "staging",
+        "EXPO_PUBLIC_BUILD_PROFILE": "staging-ios",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf-staging280826-37133857.dev.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-staging280826-37133857"
+      }
+    },
+    "production-android": {
       "android": {
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_BUILD_PROFILE": "production",
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "EXPO_PUBLIC_BUILD_PROFILE": "production-android",
+        "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
+        "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
+      }
+    },
+    "production-ios": {
+      "ios": {},
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "EXPO_PUBLIC_BUILD_PROFILE": "production-ios",
         "EXPO_PUBLIC_KF_DEFAULT_BASE_URL": "https://grupofrio-gf.odoo.com",
         "EXPO_PUBLIC_KF_ODOO_DB": "grupofrio-gf-main-34980678"
       }
     }
   },
   "submit": {
-    "production": {}
+    "staging-ios": {},
+    "production-ios": {}
   }
 }
