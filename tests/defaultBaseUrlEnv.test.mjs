@@ -16,12 +16,12 @@ assert.equal(
 );
 assert.equal(
   eas.build['staging-android'].env.EXPO_PUBLIC_KF_DEFAULT_BASE_URL,
-  'https://grupofrio-gf-staging280826-37133857.dev.odoo.com',
+  'https://grupofrio-gf-staging280826-37235488.dev.odoo.com',
   'staging Android profile must target the staging Odoo host without the /odoo suffix',
 );
 assert.equal(
   eas.build['staging-android'].env.EXPO_PUBLIC_KF_ODOO_DB,
-  'grupofrio-gf-staging280826-37133857',
+  'grupofrio-gf-staging280826-37235488',
   'staging Android profile must target the staging Odoo database',
 );
 assert.equal(
@@ -31,12 +31,12 @@ assert.equal(
 );
 assert.equal(
   eas.build['staging-ios'].env.EXPO_PUBLIC_KF_DEFAULT_BASE_URL,
-  'https://grupofrio-gf-staging280826-37133857.dev.odoo.com',
+  'https://grupofrio-gf-staging280826-37235488.dev.odoo.com',
   'staging iOS profile must target the staging Odoo host without the /odoo suffix',
 );
 assert.equal(
   eas.build['staging-ios'].env.EXPO_PUBLIC_KF_ODOO_DB,
-  'grupofrio-gf-staging280826-37133857',
+  'grupofrio-gf-staging280826-37235488',
   'staging iOS profile must target the staging Odoo database',
 );
 assert.equal(
@@ -76,7 +76,6 @@ assert.equal(
 );
 
 const source = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8');
-
 assert.match(
   source,
   /EXPO_PUBLIC_KF_DEFAULT_BASE_URL/,
