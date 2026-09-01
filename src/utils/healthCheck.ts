@@ -13,6 +13,9 @@ import { useProductStore } from '../stores/useProductStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { getLogBuffer, getErrorLog, getPersistedErrorCount } from './logger';
 import { getGpsMode } from '../services/gps';
+import Constants from 'expo-constants';
+import { getRuntimeAppEnvironment } from '../config/appEnvironment.ts';
+import { useStagingBackendStore } from '../stores/useStagingBackendStore.ts';
 
 export type HealthLevel = 'healthy' | 'degraded' | 'critical';
 
@@ -164,6 +167,10 @@ export function getDiagnosticsExport(): Record<string, unknown> {
   const health = getHealthStatus();
   const logBuffer = getLogBuffer();
   const apiLogs = logBuffer.filter((entry) => entry.category === 'api');
+  const environment = getRuntimeAppEnvironment(
+    Constants.expoConfig?.extra?.appEnvironment as string | undefined,
+  );
+  const stagingIdentity = useStagingBackendStore.getState().identity;
 
   return {
     exportedAt: new Date().toISOString(),
@@ -222,6 +229,14 @@ export function getDiagnosticsExport(): Record<string, unknown> {
       mode: getGpsMode(),
       queueSize: sync.queue.filter((i) => i.type === 'gps' && i.status === 'pending').length,
     },
+    stagingBackend: environment === 'staging'
+      ? {
+          status: stagingIdentity.status,
+          host: stagingIdentity.host,
+          db: stagingIdentity.db,
+          reason: stagingIdentity.reason,
+        }
+      : undefined,
     logs: {
       recentCount: logBuffer.length,
       errorCount: getErrorLog().length,

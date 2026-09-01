@@ -9,6 +9,7 @@ import {
   Platform, ScrollView,
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
+import Constants from 'expo-constants';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../src/stores/useAuthStore';
 import { DEFAULT_BASE_URL } from '../../src/services/api';
@@ -18,6 +19,8 @@ import { Input } from '../../src/components/ui/Input';
 import { GrupoFrioLogo } from '../../src/components/ui/GrupoFrioLogo';
 import { colors, spacing, radii } from '../../src/theme/tokens';
 import { typography } from '../../src/theme/typography';
+import { getRuntimeAppEnvironment } from '../../src/config/appEnvironment.ts';
+import { useStagingBackendStore } from '../../src/stores/useStagingBackendStore.ts';
 
 export default function LoginScreen() {
   const [barcode, setBarcode] = useState('');
@@ -25,6 +28,10 @@ export default function LoginScreen() {
   const [isOnline, setIsOnline] = useState(true);
   const [validationError, setValidationError] = useState('');
   const { login, isLoading, error } = useAuthStore();
+  const identity = useStagingBackendStore((state) => state.identity);
+  const environment = getRuntimeAppEnvironment(
+    Constants.expoConfig?.extra?.appEnvironment as string | undefined,
+  );
 
   // Conectividad para el aviso offline (login nuevo requiere internet; una
   // sesión previa se restaura sola al abrir la app vía rehydrateAuth).
@@ -96,6 +103,16 @@ export default function LoginScreen() {
               </View>
             ) : null}
 
+            {environment === 'staging' ? (
+              <View style={identity.status === 'verified' ? styles.verifiedBox : styles.unverifiedBox}>
+                <Text style={[typography.dim, styles.backendStatusText]}>
+                  {identity.status === 'verified'
+                    ? `STAGING verificado: ${identity.host} / ${identity.db}`
+                    : 'STAGING no verificado. Confirma host y DB antes de operar.'}
+                </Text>
+              </View>
+            ) : null}
+
             <Button
               label="Iniciar Sesion"
               onPress={handleLogin}
@@ -153,6 +170,13 @@ const styles = StyleSheet.create({
     color: colors.error,
     textAlign: 'center',
   },
+  verifiedBox: {
+    backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: radii.button, padding: 10,
+  },
+  unverifiedBox: {
+    backgroundColor: colors.warningAlpha08, borderRadius: radii.button, padding: 10,
+  },
+  backendStatusText: { textAlign: 'center', lineHeight: 16 },
   version: {
     textAlign: 'center',
     marginTop: 40,

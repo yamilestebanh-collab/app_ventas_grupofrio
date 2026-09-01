@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 const apiSource = readFileSync('src/services/api.ts', 'utf8');
 const authSource = readFileSync('src/stores/useAuthStore.ts', 'utf8');
 const syncSource = readFileSync('src/stores/useSyncStore.ts', 'utf8');
+const loginSource = readFileSync('app/(auth)/login.tsx', 'utf8');
+const profileSource = readFileSync('app/profile.tsx', 'utf8');
 
 assert.match(
   apiSource,
@@ -30,5 +32,8 @@ assert.match(
   /staging_backend_unverified_deferred/,
   'sync queue must defer instead of sending while staging is unverified',
 );
+assert.match(loginSource, /useStagingBackendStore/, 'login must show staging verification');
+assert.match(profileSource, /BACKEND STAGING/, 'profile must show staging backend details');
+assert.match(profileSource, /identity\.db/, 'profile must show the resolved DB');
 
 console.log('staging backend wiring: ok');

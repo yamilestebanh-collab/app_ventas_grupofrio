@@ -15,6 +15,9 @@ import { typography, fonts } from '../src/theme/typography';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { useSyncStore } from '../src/stores/useSyncStore';
 import { getDiagnosticsExport, getLocalHealthSnapshot } from '../src/utils/healthCheck';
+import Constants from 'expo-constants';
+import { getRuntimeAppEnvironment } from '../src/config/appEnvironment.ts';
+import { useStagingBackendStore } from '../src/stores/useStagingBackendStore.ts';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -23,6 +26,10 @@ export default function ProfileScreen() {
     isSupervisor, allowCreateCustomer, logout,
   } = useAuthStore();
   const pendingCount = useSyncStore((s) => s.pendingCount);
+  const identity = useStagingBackendStore((state) => state.identity);
+  const environment = getRuntimeAppEnvironment(
+    Constants.expoConfig?.extra?.appEnvironment as string | undefined,
+  );
 
   // V2: Hidden diagnostics — tap version 5 times
   const tapCountRef = useRef(0);
@@ -143,6 +150,18 @@ export default function ProfileScreen() {
             </Text>
           </View>
         </Card>
+
+        {environment === 'staging' ? (
+          <>
+            <Text style={styles.sectionTitle}>BACKEND STAGING</Text>
+            <Card>
+              <View style={styles.infoRow}><Text style={styles.infoLabel}>Estado</Text><Text style={styles.infoValue}>{identity.status.toUpperCase()}</Text></View>
+              <View style={styles.infoRow}><Text style={styles.infoLabel}>Host</Text><Text style={styles.infoValue}>{identity.host || '--'}</Text></View>
+              <View style={styles.infoRow}><Text style={styles.infoLabel}>DB</Text><Text style={styles.infoValue}>{identity.db || '--'}</Text></View>
+              {identity.reason ? <View style={styles.infoRow}><Text style={styles.infoLabel}>Motivo</Text><Text style={styles.infoValue}>{identity.reason}</Text></View> : null}
+            </Card>
+          </>
+        ) : null}
 
         {/* V2: Hidden diagnostics panel — visible after 5 taps on version */}
         {showDiagnostics && (
