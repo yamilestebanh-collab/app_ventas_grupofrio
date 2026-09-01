@@ -44,13 +44,14 @@
 - [ ] APK instalado en un Android real (no emulador).
 - [ ] Si el teléfono ya tenía KOLD Field, el APK nuevo se instaló **encima** sin pedir desinstalación.
 - [ ] App abre con Metro **APAGADO** en mi PC. No aparece la pantalla roja "Could not connect to development server".
-- [ ] **Endpoint correcto confirmado**: el login se conecta al Odoo esperado para este release (no a otro entorno) — verificar revisando los logs de la pantalla de Sync o haciendo un check-in y validando que llegue al backend correcto.
+- [ ] **Endpoint correcto confirmado**: en staging, la tarjeta `BACKEND STAGING` muestra `VERIFIED`, host aprobado y DB resuelta por `GET /current_database` en esta sesion. No usar check-in ni otra escritura como verificacion inicial.
 - [ ] El badge visible de la app coincide con el ambiente esperado (`STAGING` si no es producción).
 - [ ] Si fue iOS staging, confirmé que la app instalada visible es `KOLD Field Staging` y no la oficial.
 - [ ] Login funciona.
 - [ ] Navegación principal funciona: Home, Ruta, Ventas, Inventario, Alertas.
 - [ ] Flujo mínimo de venta/pedido funciona end-to-end: entrar a un stop, agregar producto, capturar venta, ver que entra en cola de sync, drena cuando hay red.
 - [ ] Versión visible en la app coincide con el release esperado.
+- [ ] Antes de una escritura en staging, confirmé que no es Expo Go y que no hay operaciones de cola enviandose con backend no verificado.
 
 ## 6. Distribución
 

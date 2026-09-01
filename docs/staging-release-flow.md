@@ -125,6 +125,17 @@ Promover a `production` solo si:
 - flujo afectado probado end-to-end
 - sin confusión entre build de staging y build de producción
 
+## Verificacion obligatoria antes de una escritura en staging
+
+- Confirmar que la app instalada es `KOLD Field Staging`, no Expo Go ni `KOLD Field` de produccion.
+- Confirmar el badge visible `STAGING`.
+- Confirmar que la tarjeta `BACKEND STAGING` muestra estado `VERIFIED`.
+- Confirmar que el host mostrado es el host aprobado de staging.
+- Confirmar que la DB fue resuelta por `GET /current_database` en la sesion actual.
+- No permitir que una operacion pendiente de la cola se envie mientras el backend este no verificado.
+
+No cambiar la URL de staging a `https://odoo-staging.grupofrio.com` hasta confirmar DNS, HTTPS, `current_database` y el mapeo de la rama activa en Odoo.sh. Cuando ese dominio este activo, staging no debe usar una DB fija en `EXPO_PUBLIC_KF_ODOO_DB`; la DB se resuelve en runtime.
+
 ## Nota operativa
 
 La URL base de staging para la app móvil debe guardarse sin sufijo `/odoo`, porque la app compone rutas como `/web/database/list` y `/api/employee-sign-in` sobre esa base.
