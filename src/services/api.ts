@@ -24,6 +24,7 @@ import {
   buildEnvironmentStorageKey,
   getRuntimeAppEnvironment,
 } from '../config/appEnvironment.ts';
+import { useStagingBackendStore } from '../stores/useStagingBackendStore.ts';
 
 const APP_ENVIRONMENT = getRuntimeAppEnvironment(
   Constants.expoConfig?.extra?.appEnvironment as string | undefined,
@@ -264,6 +265,9 @@ export async function postRest<T = any>(
   options: { timeoutMs?: number } = {},
 ): Promise<T> {
   const absoluteUrl = await buildAbsoluteUrl(url);
+  if (APP_ENVIRONMENT === 'staging') {
+    useStagingBackendStore.getState().assertMutationAllowed(absoluteUrl);
+  }
   const headers = await buildHeaders();
   const requestId = makeRequestId();
   const startedAt = Date.now();
