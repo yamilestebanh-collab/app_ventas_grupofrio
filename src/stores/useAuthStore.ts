@@ -8,6 +8,7 @@
 
 import { create } from 'zustand';
 import NetInfo from '@react-native-community/netinfo';
+import Constants from 'expo-constants';
 import {
   setAuthTokens,
   clearAuthTokens,
@@ -17,6 +18,8 @@ import {
 } from '../services/api';
 import { signOut } from '../services/gfLogistics';
 import { resolveOdooDatabase } from '../services/odooDatabase';
+import { resolveStagingBackendIdentity } from '../services/stagingBackendIdentity.ts';
+import { getRuntimeAppEnvironment } from '../config/appEnvironment.ts';
 import { extractEmployeeAnalyticPlaza } from '../services/extractEmployeeAnalyticPlaza';
 import {
   clearSensitiveFieldData,
@@ -37,6 +40,7 @@ import {
 import { useSalesStore } from './useSalesStore';
 import { createUuidV4 } from '../utils/clientEvent';
 import { transferEmployeeDayBundleForReauthentication } from '../services/employeeDayBundle';
+import { useStagingBackendStore } from './useStagingBackendStore.ts';
 
 interface AuthState {
   // Auth status
@@ -298,13 +302,37 @@ export const useAuthStore = create<AuthState>((set) => ({
     let destructiveSessionActivation = false;
     set({ isLoading: true, error: null });
     try {
-      await setBaseUrl(baseUrl);
+      const environment = getRuntimeAppEnvironment(
+        Constants.expoConfig?.extra?.appEnvironment as string | undefined,
+      );
+      let dbName: string | null;
 
-      const dbName = await resolveOdooDatabase(baseUrl, db);
+      if (environment === 'staging') {
+        useStagingBackendStore.getState().clearIdentity();
+        const expectedBaseUrl = String(Constants.expoConfig?.extra?.defaultBaseUrl || baseUrl);
+        const identity = await resolveStagingBackendIdentity({
+          baseUrl,
+          expectedBaseUrl,
+        });
+        useStagingBackendStore.getState().setIdentity(identity);
+        if (identity.status !== 'verified') {
+          set({
+            error: 'Staging no verificado. Confirma host y DB antes de iniciar sesion.',
+            isLoading: false,
+          });
+          return false;
+        }
+        dbName = identity.db;
+      } else {
+        dbName = await resolveOdooDatabase(baseUrl, db);
+      }
+
       if (!dbName) {
         set({ error: 'No se pudo resolver la base de datos de Odoo', isLoading: false });
         return false;
       }
+
+      await setBaseUrl(baseUrl);
 
       const loginUrl = `${baseUrl}/api/employee-sign-in`;
       const netState = await NetInfo.fetch();
@@ -533,6 +561,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: async () => {
     set({ isAuthenticated: false });
+    useStagingBackendStore.getState().clearIdentity();
     try {
       await signOut();
     } finally {
