@@ -20,6 +20,7 @@
  */
 
 import { create } from 'zustand';
+import Constants from 'expo-constants';
 import {
   SyncQueueItem,
   SyncEnqueueOptions,
@@ -38,7 +39,8 @@ import {
   type ServerAckIntent,
 } from '../services/ambiguousAckReconcile';
 import { LEDGER_AFFECTING_SYNC_TYPES } from '../services/inventoryLedgerLogic';
-import { postRest } from '../services/api';
+import { getBaseUrl, postRest } from '../services/api';
+import { getRuntimeAppEnvironment } from '../config/appEnvironment.ts';
 import { assertCurrentEmployeeDayBundleAllowsActions } from '../services/dayBundleMutationGate';
 import {
   readPhotoAsBase64,
@@ -124,6 +126,10 @@ import {
 } from '../services/saleDefinitiveFailure';
 import { promoteStoredSaleTicketServerResult } from '../services/saleTicketStorage';
 import { restorePersistedSyncQueue } from '../services/syncQueueRehydration';
+import {
+  StagingBackendUnverifiedError,
+  useStagingBackendStore,
+} from './useStagingBackendStore.ts';
 
 // ═══ Constants ═══
 
@@ -1129,6 +1135,21 @@ async function processOneItemUnheld(
   if (!areSyncDependenciesSatisfied(item, get().queue)) {
     logInfo('sync', 'dependency_wait', { id: item.id, type: item.type, dependsOn: item.dependsOn });
     return 'dependency_wait';
+  }
+
+  const environment = getRuntimeAppEnvironment(
+    Constants.expoConfig?.extra?.appEnvironment as string | undefined,
+  );
+  if (environment === 'staging') {
+    try {
+      useStagingBackendStore.getState().assertMutationAllowed(await getBaseUrl());
+    } catch (error) {
+      if (error instanceof StagingBackendUnverifiedError) {
+        logWarn('sync', 'staging_backend_unverified_deferred', { id: item.id, type: item.type });
+        return 'dependency_wait';
+      }
+      throw error;
+    }
   }
 
   // Mark as syncing
