@@ -50,7 +50,11 @@ import {
   canStartSaleWithRouteLoad,
 } from '../../src/services/routeLoadAcceptance';
 import { createSale, closeOffrouteVisit } from '../../src/services/gfLogistics';
-import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
+import {
+  DayBundleActionBlockedError,
+  assertCurrentEmployeeDayBundleAllowsActions,
+  describeDayBundleActionBlock,
+} from '../../src/services/dayBundleMutationGate';
 import { buildLocalStockDelta } from '../../src/services/stockRollback';
 import { applySaleStockViaLedger, buildSaleLedgerMovements, commitQueuedOperationWithLedger } from '../../src/services/inventoryLedgerAdapters';
 import { buildSalesCreatePayload } from '../../src/services/gfLogisticsContracts';
@@ -283,7 +287,24 @@ function SaleScreenInner() {
     try {
       await assertCurrentEmployeeDayBundleAllowsActions();
     } catch (error) {
-      Alert.alert('Bundle vencido', safeUnknownErrorMessage(error, 'Renueva el bundle del día antes de vender.'));
+      const bundleAlert = error instanceof DayBundleActionBlockedError
+        ? describeDayBundleActionBlock(error)
+        : { title: 'Bundle no disponible', message: safeUnknownErrorMessage(error, 'Renueva el bundle del día antes de vender.') };
+      Alert.alert(
+        bundleAlert.title,
+        bundleAlert.message,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Renovar ahora',
+            onPress: () => {
+              void useEmployeeDayBundleStore.getState().prepare().catch((refreshError) => {
+                Alert.alert('No se pudo renovar el bundle', safeUnknownErrorMessage(refreshError, 'Verifica tu conexión e intenta de nuevo.'));
+              });
+            },
+          },
+        ],
+      );
       return;
     }
 

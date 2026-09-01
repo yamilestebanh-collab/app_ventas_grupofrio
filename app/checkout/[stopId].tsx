@@ -29,8 +29,13 @@ import { OperationGate } from '../../src/components/OperationGate';
 import { useNavigationStore } from '../../src/stores/useNavigationStore';
 import { buildCheckoutNavigation } from '../../src/services/checkoutNavigation';
 import { createIncident } from '../../src/services/routeIncidents';
-import { assertCurrentEmployeeDayBundleAllowsActions } from '../../src/services/dayBundleMutationGate';
+import {
+  DayBundleActionBlockedError,
+  assertCurrentEmployeeDayBundleAllowsActions,
+  describeDayBundleActionBlock,
+} from '../../src/services/dayBundleMutationGate';
 import { createUuidV4 } from '../../src/utils/clientEvent';
+import { useEmployeeDayBundleStore } from '../../src/stores/useEmployeeDayBundleStore';
 
 function CheckoutScreenInner() {
   const { stopId } = useLocalSearchParams<{ stopId: string }>();
@@ -172,7 +177,24 @@ function CheckoutScreenInner() {
     try {
       await assertCurrentEmployeeDayBundleAllowsActions();
     } catch (error) {
-      Alert.alert('Bundle vencido', error instanceof Error ? error.message : 'Renueva el bundle del día antes de cerrar la visita.');
+      const bundleAlert = error instanceof DayBundleActionBlockedError
+        ? describeDayBundleActionBlock(error)
+        : { title: 'Bundle no disponible', message: error instanceof Error ? error.message : 'Renueva el bundle del día antes de cerrar la visita.' };
+      Alert.alert(
+        bundleAlert.title,
+        bundleAlert.message,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Renovar ahora',
+            onPress: () => {
+              void useEmployeeDayBundleStore.getState().prepare().catch((refreshError) => {
+                Alert.alert('No se pudo renovar el bundle', refreshError instanceof Error ? refreshError.message : 'Verifica tu conexión e intenta de nuevo.');
+              });
+            },
+          },
+        ],
+      );
       return;
     }
     setCheckingOut(true);
