@@ -95,7 +95,14 @@
       "./modules/thermal-printer/app.plugin.js"
     ],
     "extra": {
-      "googleMapsApiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8"
-    }
+      "googleMapsApiKey": "AIzaSyB0FE50kwn4t0l1JCruboPXqyVLHAtRzk8",
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "b7e8dcec-cf03-4dbc-9919-34022d5468ea"
+      }
+    },
+    "owner": "dirume"
   }
 }
