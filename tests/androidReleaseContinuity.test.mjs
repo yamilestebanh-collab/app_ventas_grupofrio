@@ -3,8 +3,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const repoRoot = process.cwd();
-const expectedVersionCode = 5;
-const expectedVersionName = '1.4.1';
+const expectedVersionCode = 6;
+const expectedVersionName = '1.4.2';
+const expectedEasOwner = 'grupofrio';
+const expectedEasProjectId = '0a24997e-51fe-417a-a8d7-4bc83a1d7dff';
 
 const appConfig = JSON.parse(readFileSync(resolve(repoRoot, 'app.json'), 'utf8'));
 assert.equal(
@@ -16,6 +18,16 @@ assert.equal(
   appConfig.expo.version,
   expectedVersionName,
   'app.json must identify the bearer-auth field release',
+);
+assert.equal(
+  appConfig.expo.owner,
+  expectedEasOwner,
+  'app.json must use the Grupo Frio EAS organization',
+);
+assert.equal(
+  appConfig.expo.extra.eas.projectId,
+  expectedEasProjectId,
+  'app.json must use the Grupo Frio EAS project that owns Android credentials',
 );
 
 const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
@@ -33,13 +45,13 @@ assert.equal(
 const verifierSource = readFileSync(resolve(repoRoot, 'scripts/verify-android-release.mjs'), 'utf8');
 assert.match(
   verifierSource,
-  /versionCode:\s*'5'/,
-  'release verification must require Android versionCode 5',
+  /versionCode:\s*'6'/,
+  'release verification must require Android versionCode 6',
 );
 assert.match(
   verifierSource,
-  /versionName:\s*'1\.4\.1'/,
-  'release verification must require Android versionName 1.4.1',
+  /versionName:\s*'1\.4\.2'/,
+  'release verification must require Android versionName 1.4.2',
 );
 assert.doesNotMatch(
   verifierSource,
@@ -52,8 +64,8 @@ if (existsSync(nativeBuildGradle)) {
   const nativeSource = readFileSync(nativeBuildGradle, 'utf8');
   assert.match(
     nativeSource,
-    /defaultConfig\s*\{[\s\S]*?versionCode\s+5\b/,
-    'the generated native Android project must use versionCode 5 when present',
+    /defaultConfig\s*\{[\s\S]*?versionCode\s+6\b/,
+    'the generated native Android project must use versionCode 6 when present',
   );
 }
 
