@@ -7,6 +7,7 @@ const expectedVersionCode = 6;
 const expectedVersionName = '1.4.2';
 const expectedEasOwner = 'grupofrio';
 const expectedEasProjectId = '0a24997e-51fe-417a-a8d7-4bc83a1d7dff';
+const expectedCorporateCertificateSha256 = 'c18ac1fab03b839e4e4c25fcedd99d59e16927b593a0e292cfd880287bd6f08c';
 
 const appConfig = JSON.parse(readFileSync(resolve(repoRoot, 'app.json'), 'utf8'));
 assert.equal(
@@ -52,6 +53,16 @@ assert.match(
   verifierSource,
   /versionName:\s*'1\.4\.2'/,
   'release verification must require Android versionName 1.4.2',
+);
+assert.match(
+  verifierSource,
+  new RegExp(expectedCorporateCertificateSha256),
+  'release verification must require the Grupo Frio corporate certificate',
+);
+assert.match(
+  verifierSource,
+  /process\.env\.APK_PATH/,
+  'release verification must support an explicit downloaded EAS APK path',
 );
 assert.doesNotMatch(
   verifierSource,
